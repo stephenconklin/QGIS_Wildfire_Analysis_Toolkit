@@ -1,6 +1,6 @@
 # Design: from severity summary to fire analysis pipeline
 
-Status: agreed 2026-10-06. Phase 1 (HLS search and fetch) built and tested on QGIS 3.44 and 4.2.3, headless and desktop.
+Status: agreed 2026-10-06. Phases 1–6 built (2.0.0-dev, unreleased) and tested on QGIS 3.44 and 4.2.3, headless and in the desktop session; validated against 23 MTBS fires (below). Open: Earth Search provider (not needed so far), credentials from the QGIS authentication manager instead of ~/.netrc.
 
 ## Goal
 
