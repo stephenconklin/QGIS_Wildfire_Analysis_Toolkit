@@ -105,7 +105,7 @@ fetching always mosaics.
 | 1 | Find HLS scenes | `fireanalysis:findhlsscenes` | done (2.0.0-dev) |
 | 1 | Fetch HLS NBR | `fireanalysis:fetchhlsnbr` | done (2.0.0-dev) |
 | 2 | Prepare local scene (Landsat C2 L2, ARD, Sentinel-2 L2A) | | next |
-| 2 | Build dNBR (align, combine masks, offset) | | |
+| 2 | Build dNBR (align, offset, RdNBR, RBR) | `fireanalysis:builddnbr` | done (2.0.0-dev) |
 | 3 | Planetary Computer and Earth Search providers | | |
 | 4 | Scene pair suggestion (AOI-clear %, day-of-year match) | | |
 | 5 | Perimeter draft; offset and threshold estimates; `dnbr6` | | |
@@ -174,9 +174,18 @@ remaining gap is bandpass adjustment and BRDF normalization. For context, the
 BAER Soil Burn Severity map is 7 / 65 / 26 / 2 % unburned-very low / low /
 moderate / high; soil severity normally reads lower than dNBR classes.
 
-Post-fire Fmask flags 1.8 % of the grid as water against 0.7 % before the fire.
-Check where: it may be dark burn scars (masked, so they drop out of the
-statistics).
+**Fmask water in the burn.** Inside the test-data burned area, Fmask flags
+0.03 % as water before the fire and 0.66 % after (1,827 pixels new). Their
+pre-fire NBR is 0.41 (vegetated), so these are burn scars, spread over all
+classes with a tilt to moderate-high and high. Small here, so water stays masked
+by default (real water would otherwise reach the offset ring and the classes);
+the Fetch log reports the share. Pixels with zero or negative NIR or SWIR2 get
+no NBR: 1,048 in the post-fire grid, 1,024 of them flagged water.
+
+**dNBR offset.** Ring 90–2,090 m outside the full Lab 6 perimeter: 0.026,
+std 0.053, robust 0.037, 0.1 % of the ring above 0.27. Around the clipped
+test-data perimeter the ring runs into the fire (14 % above 0.27, std 0.22),
+which is what the burned-sample warning catches. The median still held (0.036).
 
 **Still to do:** a fire MTBS has mapped, to compare our offset, thresholds and
 `dnbr6` with the published ones.

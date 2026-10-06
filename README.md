@@ -67,7 +67,30 @@ Output: one footprint per granule with `granule`, `sensor`, `tile`, `date`, `doy
 | Reflectance (optional) | SWIR2 / NIR / red reflectance, for a false-color view of the burn. |
 | Fmask (optional) | The Fmask window, unchanged. |
 
-The grid is snapped to whole 30 m pixels in the target CRS, so a pre-fire and a post-fire run with the same AOI and CRS line up exactly. dNBR is pre-fire NBR minus post-fire NBR (for now, use the Raster Calculator), and it feeds *Burn severity summary* directly.
+The grid is snapped to whole 30 m pixels in the target CRS, so a pre-fire and a post-fire run with the same AOI and CRS line up exactly.
+
+**Build dNBR** (`fireanalysis:builddnbr`, under **Fire Analysis › Severity**) turns the two NBRs into dNBR, RdNBR and RBR, and measures the dNBR offset: the median dNBR of unburned land, which is rarely exactly 0 because the two dates differ in phenology, moisture and sun angle.
+
+| Parameter | Description |
+|---|---|
+| Pre-fire NBR, Post-fire NBR | Raw units (−1 to 1). The output uses the post-fire grid; the pre-fire NBR is resampled (bilinear) if its grid differs. x1000 rasters are refused. |
+| Burned-area polygons | Used for the default offset: a ring outside them. |
+| dNBR offset | None, median in a ring outside the burned area (default), median inside unburned-sample polygons, or a fixed value. |
+| Unburned-sample polygons | For that method: areas of unburned vegetation like the burned vegetation (the MTBS practice). |
+| Fixed offset | For that method, in raw dNBR units. |
+| Ring gap, Ring width (Advanced) | Default 90 m and 2,000 m. |
+| Subtract the offset from dNBR (Advanced) | Off by default: the USGS dNBR thresholds were set on uncorrected dNBR. |
+
+| Output | Description |
+|---|---|
+| dNBR | Pre-fire NBR − post-fire NBR, Float32, nodata −9999. |
+| RdNBR | (dNBR − offset) / √\|pre-fire NBR\| (Miller & Thode 2007; \|NBR\| floored at 0.001). |
+| RBR | (dNBR − offset) / (pre-fire NBR + 1.001) (Parks et al. 2014). |
+| Offset, standard deviation, pixel count | Numbers, also in the log and the raster metadata, for use in models. |
+
+The log warns when the offset is beyond ±0.1 (a poorly matched pair), when the sample spreads widely (standard deviation above 0.05), and when more than 2 % of the sample has dNBR above 0.27, which means the "unburned" sample contains burned land, usually because the burned-area polygons are incomplete or clipped. The dNBR feeds *Burn severity summary* directly.
+
+For Dragon Bravo (HLS S30 2024-09-13 and L30 2025-09-15, full Lab 6 perimeter), the ring offset is 0.026 with a standard deviation of 0.053.
 
 **Earthdata login.** Reading HLS needs a free [NASA Earthdata](https://urs.earthdata.nasa.gov) account in `~/.netrc`, readable only by you (`chmod 600 ~/.netrc`):
 
@@ -77,7 +100,7 @@ machine urs.earthdata.nasa.gov login YOUR_USER password YOUR_PASSWORD
 
 GDAL sends the login only to `urs.earthdata.nasa.gov` and keeps the session cookie in a private temporary folder. A plugin setting for credentials may replace the netrc later.
 
-Fmask sometimes marks fresh burn scars as cloud shadow or water. The log reports how much of the area each class removed. If that share is large inside the fire, rerun without that class.
+Fmask sometimes marks fresh burn scars as cloud shadow or water. The log reports how much of the area each class removed. If that share is large inside the fire, rerun without that class. In the Dragon Bravo test area, 0.64 % of the burned area (formerly vegetated, pre-fire NBR about 0.4) is flagged water only after the fire, slightly more in the higher severity classes; real water such as the Colorado River is the reason water stays masked by default.
 
 ## Inputs
 
@@ -229,7 +252,8 @@ Plotting percent puts zones of different sizes on the same scale. Use the `ac_` 
 | `docs/DESIGN.md` | The pipeline plan, decisions and verified service details. |
 | `dev/build_plugin.py` | Builds `dist/qgis_burn_severity-<version>.zip`. |
 | `dev/smoke_test.py` | Runs every mode on `testdata/` and checks the counts, inside QGIS (Python Console) or headless. |
-| `dev/online_test.py` | Tests the HLS algorithms against the live archive (needs a network and the Earthdata login). |
+| `dev/pipeline_test.py` | Tests the offline pipeline algorithms (Build dNBR) on `testdata/`. |
+| `dev/online_test.py` | Runs the whole chain against the live HLS archive, from search to summary table (needs a network and the Earthdata login). |
 | `dev/run_headless.sh` | Runs a dev script with a QGIS app's bundled Python, for example `dev/run_headless.sh /Applications/QGIS.app` (smoke test) or `dev/run_headless.sh /Applications/QGIS.app online_test.py`. |
 | `dev/make_testdata.py` | Rebuilds `testdata/` from the full Lab 6 data. |
 

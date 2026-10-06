@@ -6,9 +6,10 @@ The plugin becomes a fire analysis pipeline (plan in `docs/DESIGN.md`). The stan
 
 - **Find HLS scenes** (`fireanalysis:findhlsscenes`, plugin only). Searches NASA's HLS v2.0 archive (Landsat 8/9 L30 and Sentinel-2 S30) over an area of interest and date range, and returns one footprint per granule with its tile, date, scene cloud cover and the share of the AOI it covers. No login needed.
 - **Fetch HLS NBR** (`fireanalysis:fetchhlsnbr`, plugin only). Reads only the AOI window (plus a 3 km buffer) of the chosen granules from NASA Earthdata, mosaics the tiles on a 30 m grid snapped to whole pixels, masks the chosen Fmask classes, and writes NBR in raw units, plus an optional SWIR2/NIR/red reflectance stack and the Fmask window. The same AOI and CRS always give the same grid, so pre- and post-fire NBR line up. The Earthdata login is read from `~/.netrc`.
+- **Build dNBR** (`fireanalysis:builddnbr`, plugin only). dNBR, RdNBR and RBR from pre- and post-fire NBR on the post-fire grid, with the dNBR offset of unburned land: the median in a ring outside the burned area (default), inside unburned-sample polygons, or a fixed value. RdNBR and RBR use the offset; dNBR is written without it unless asked. Warns when the offset or its spread is large, or when the "unburned" sample looks burned (incomplete or clipped burned-area polygons). The offset is also returned as numbers for models.
 - In the plugin, Burn severity summary moves to a **Severity** group; its id and parameters are unchanged.
 - Checked against Lab 6: HLS gives a dNBR inside the burned area that matches a correctly calibrated rebuild from the lab's own Sentinel-2 and Landsat 9 files. The lab's `dNBR.tif` turns out to combine Sentinel-2 NBR without the −1000 `BOA_ADD_OFFSET` and Landsat 9 NBR from unscaled DN, which is why it shows almost no High severity.
-- `dev/online_test.py` tests the HLS algorithms against the live archive. `dev/run_headless.sh` takes the script to run as an optional second argument.
+- `dev/online_test.py` runs the whole chain against the live HLS archive: find, fetch pre and post, build dNBR, summarize. `dev/pipeline_test.py` tests Build dNBR offline: it reproduces `testdata/dnbr.tif` exactly and matches an independent offset calculation. `dev/run_headless.sh` takes the script to run as an optional second argument.
 
 ## 1.1.0 — 2026-10-06
 

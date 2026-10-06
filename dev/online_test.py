@@ -14,7 +14,9 @@ Uses the test-data burned area (Dragon Bravo, clipped) as the AOI:
   2. Fetch HLS NBR for each, and check the two grids are identical, the CRS is
      UTM 12N, and the NBR is in range and mostly valid.
   3. A missing netrc file stops the fetch with a clear message.
-Prints PASS or FAIL per check and the dNBR summary inside the burned area.
+  4. Build dNBR with the ring offset, then Burn severity summary on the result:
+     the whole pipeline from search to summary table.
+Prints PASS or FAIL per check, the offset and the summary table.
 """
 import os
 import sys
@@ -38,6 +40,7 @@ if QgsApplication.instance() is None:  # headless: start QGIS and Processing
     Processing.initialize()
 
 from fireanalysis import VERSION  # noqa: E402
+from fireanalysis.algorithms.build_dnbr import BuildDnbr  # noqa: E402
 from fireanalysis.algorithms.fetch_hls_nbr import FetchHlsNbr  # noqa: E402
 from fireanalysis.algorithms.find_hls_scenes import FindHlsScenes  # noqa: E402
 
@@ -102,7 +105,7 @@ for label, sensor, day in DATES:
 
     path = os.path.join(OUT, f"nbr_{label}.tif")
     res2, _, log = _run(FetchHlsNbr(), {
-        "AOI": AOI, "SCENES": scenes, "BUFFER": 0, "NBR": path,
+        "AOI": AOI, "SCENES": scenes, "NBR": path,
         "REFLECTANCE": os.path.join(OUT, f"refl_{label}.tif")})
     check(f"fetch {sensor} NBR", res2 is not None, " | ".join(log))
     for line in log:
@@ -152,6 +155,43 @@ if len(nbr) == 2:
           f"range {d.min():.3f} to {d.max():.3f}")
     print("  USGS classes (Unburned..High): " + " / ".join(f"{c:,} ({100 * c / d.size:.2f} %)" for c in counts))
     print("  Lab 6 test data, same classes: 7,248 / 140,263 / 107,045 / 31,598 / 33")
+
+    # Build dNBR (ring offset) and Burn severity summary: the whole chain
+    res, _, log = _run(BuildDnbr(), {"PRE_NBR": nbr["pre"], "POST_NBR": nbr["post"], "PERIMETER": AOI,
+                                  "DNBR": os.path.join(OUT, "dnbr.tif"), "RDNBR": os.path.join(OUT, "rdnbr.tif"),
+                                  "RBR": None})
+    check("build dNBR with ring offset", res is not None, " | ".join(log))
+    if res is not None:
+        print("      " + next(m for m in log if m.startswith("dNBR offset")))
+        check(f"offset is small ({res['OFFSET']:.4f}) for a well-matched pair", abs(res["OFFSET"]) < 0.1)
+        # The test-data burned area is clipped to the window, so its ring runs into burned land
+        check("clipped perimeter: burned-sample warning", any("looks burned" in m for m in log), " | ".join(log))
+        LAB_PERIMETER = ("/Users/stephenconklin/Library/CloudStorage/OneDrive-FortLewisCollege/"
+                         "GEOG-400-Raster-GIS/Lab-6/QGISProject/data/Output/BurnArea_Clip.shp")
+        if os.path.exists(LAB_PERIMETER):
+            full, _, flog = _run(BuildDnbr(), {"PRE_NBR": nbr["pre"], "POST_NBR": nbr["post"],
+                                               "PERIMETER": LAB_PERIMETER, "DNBR": os.path.join(OUT, "dnbr_full.tif"),
+                                               "RDNBR": None, "RBR": None})
+            ok = full is not None and abs(full["OFFSET"] - 0.026) < 0.005 and not any("looks burned" in m for m in flog)
+            check("full Lab 6 perimeter: offset ≈ 0.026, no burned-sample warning", ok, " | ".join(flog))
+            if full is not None:
+                print("      " + next(m for m in flog if m.startswith("dNBR offset")))
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("burn_severity_summary",
+                                                      os.path.join(REPO, "burn_severity_summary.py"))
+        bss = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bss)
+        res2, context2, log2 = _run(bss.BurnSeveritySummary(), {
+            "DNBR": res["DNBR"], "BURN_AREA": AOI,
+            "WATERSHED": os.path.join(REPO, "testdata", "testdata.gpkg") + "|layername=watershed",
+            **{k: "TEMPORARY_OUTPUT" for k in ("ZONES", "SEVERITY", "HISTOGRAM", "SUMMARY")}})
+        check("burn severity summary on the HLS dNBR", res2 is not None, " | ".join(log2))
+        if res2 is not None:
+            table = QgsProcessingUtils.mapLayerFromString(res2["SUMMARY"], context2)
+            print("      class            % Dragon Bravo   % Bright Angel   ac Dragon Bravo   ac Bright Angel")
+            for f in table.getFeatures():
+                print(f"      {f['sev_class']:15s}  {f['pct_db']:14.2f}   {f['pct_ba']:14.2f}   "
+                      f"{f['ac_db']:15,.0f}   {f['ac_ba']:15,.0f}")
 
 print(f"\n{'ALL PASSED' if not failed else f'{failed} FAILED'}")
 if _app is not None:

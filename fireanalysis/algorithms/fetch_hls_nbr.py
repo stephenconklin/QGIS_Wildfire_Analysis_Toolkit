@@ -1,15 +1,14 @@
 """Fetch HLS NBR: read the AOI window of HLS granules from NASA Earthdata,
 mosaic them on a 30 m grid, mask with Fmask and compute NBR."""
 import math
-import os
 
 from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsGeometry,
                        QgsProcessingAlgorithm, QgsProcessingException, QgsProcessingParameterCrs,
                        QgsProcessingParameterEnum, QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterFile, QgsProcessingParameterNumber,
-                       QgsProcessingParameterRasterDestination, QgsRasterFileWriter)
+                       QgsProcessingParameterRasterDestination)
 
-from .. import VERSION, earthdata, hls
+from .. import VERSION, earthdata, hls, raster
 from ..compat import advanced, double_type, polygon_source, warn
 from .find_hls_scenes import aoi_geometry
 
@@ -140,27 +139,6 @@ class FetchHlsNbr(QgsProcessingAlgorithm):
             raise QgsProcessingException(earthdata.open_error_hint(urls[0]))
         return ds
 
-    @staticmethod
-    def _write(path, arrays, like, gdal_type, nodata, metadata):
-        from osgeo import gdal
-        ext = os.path.splitext(path)[1].lstrip('.').lower()
-        driver_name = QgsRasterFileWriter.driverForExtension(ext) if ext else 'GTiff'
-        driver = gdal.GetDriverByName(driver_name or 'GTiff')
-        options = ['COMPRESS=DEFLATE', 'TILED=YES'] if driver.ShortName == 'GTiff' else []
-        out = driver.Create(path, like.RasterXSize, like.RasterYSize, len(arrays), gdal_type,
-                            options=options)
-        if out is None:
-            raise QgsProcessingException(f'Could not create {path}.')
-        out.SetGeoTransform(like.GetGeoTransform())
-        out.SetProjection(like.GetProjection())
-        out.SetMetadata(metadata)
-        for i, (name, array) in enumerate(arrays, start=1):
-            band = out.GetRasterBand(i)
-            band.SetDescription(name)
-            band.SetNoDataValue(nodata)
-            band.WriteArray(array)
-        out = None  # close and flush
-
     # ---- main -----------------------------------------------------------------
 
     def processAlgorithm(self, parameters, context, feedback):
@@ -265,7 +243,7 @@ class FetchHlsNbr(QgsProcessingAlgorithm):
         }
         results = {}
         out = self.parameterAsOutputLayer(parameters, self.NBR, context)
-        self._write(out, [('NBR', nbr)], like, gdal.GDT_Float32, hls.FILL, metadata)
+        raster.write(out, [('NBR', nbr)], like, gdal.GDT_Float32, hls.FILL, metadata)
         results[self.NBR] = out
         if want_refl:
             out = self.parameterAsOutputLayer(parameters, self.REFLECTANCE, context)
@@ -274,11 +252,11 @@ class FetchHlsNbr(QgsProcessingAlgorithm):
                 refl = data[key].astype(np.float32) * hls.SCALE
                 refl[data[key] == hls.FILL] = hls.FILL
                 stack.append((f'{bands[key]} {key}', refl))
-            self._write(out, stack, like, gdal.GDT_Float32, hls.FILL, metadata)
+            raster.write(out, stack, like, gdal.GDT_Float32, hls.FILL, metadata)
             results[self.REFLECTANCE] = out
         if parameters.get(self.FMASK) not in (None, ''):
             out = self.parameterAsOutputLayer(parameters, self.FMASK, context)
-            self._write(out, [('Fmask', fmask)], like, gdal.GDT_Byte, hls.FMASK_FILL, metadata)
+            raster.write(out, [('Fmask', fmask)], like, gdal.GDT_Byte, hls.FMASK_FILL, metadata)
             results[self.FMASK] = out
         feedback.setProgress(100)
         return results
