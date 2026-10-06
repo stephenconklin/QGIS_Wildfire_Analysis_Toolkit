@@ -19,7 +19,7 @@ from qgis.core import (QgsProcessing, QgsProcessingAlgorithm, QgsProcessingConte
 from .. import VERSION
 from ..compat import advanced, date_type, double_type, integer_type, polygon_source
 from .build_dnbr import BuildDnbr
-from .classify_severity import ESTIMATES, NEARBY, NONE_VALUE, OWN_DATA, ClassifySeverity
+from .classify_severity import CLASS_COLORS, ESTIMATES, NEARBY, NONE_VALUE, OWN_DATA, ClassifySeverity, write_png
 from .fetch_hls_nbr import FetchHlsNbr
 from .suggest_hls_pairs import ASSESSMENTS, INITIAL, SuggestHlsPairs
 
@@ -157,6 +157,24 @@ class HlsBurnSeverity(QgsProcessingAlgorithm):
             raise QgsProcessingException(f'{alg.displayName()} failed; see the log above.')
         return res
 
+    @staticmethod
+    def _map_png(classes_path, perimeter, png, context):
+        from osgeo import gdal
+        from .. import raster
+        from .build_dnbr import source_union
+        ds = gdal.Open(classes_path)
+        classes = ds.GetRasterBand(1).ReadAsArray()
+        layer = QgsProcessingUtils.mapLayerFromString(perimeter, context) if isinstance(perimeter, str) else perimeter
+        geom, crs = source_union(layer, 'burned-area')
+        from qgis.core import QgsGeometry
+        ring = QgsGeometry(geom.constGet().boundary())  # polygon boundary as lines
+        width = 1.5 * abs(ds.GetGeoTransform()[1])  # outline about 1.5 pixels wide
+        from qgis.core import QgsCoordinateTransform, QgsCoordinateReferenceSystem
+        rcrs = QgsCoordinateReferenceSystem.fromWkt(ds.GetProjection())
+        ring.transform(QgsCoordinateTransform(crs, rcrs, context.transformContext()))
+        outline = raster.rasterize(ring.buffer(width / 2, 4), rcrs, ds, context.transformContext())
+        write_png(classes, ds, outline, png)
+
     # ---- main ---------------------------------------------------------------------
 
     def processAlgorithm(self, parameters, context, feedback):
@@ -279,7 +297,11 @@ class HlsBurnSeverity(QgsProcessingAlgorithm):
                             if isinstance(row[n], float) else row[n] for n in fields])
         steps.setCurrentStep(5)
 
-        # 6. Report
+        # 6. Report, with a map picture of the classes
+        try:
+            self._map_png(classes, perimeter, os.path.join(folder, 'dnbr6.png'), context)
+        except Exception as e:  # a picture must never fail the assessment
+            log.setdefault('pipeline', []).append(f'WARNING Could not draw dnbr6.png: {e}')
         report['warnings'] = [m[len('WARNING '):] for msgs in log.values() for m in msgs if m.startswith('WARNING ')]
         report['files'] = sorted(os.listdir(folder))
         report['log'] = log
@@ -295,6 +317,27 @@ class HlsBurnSeverity(QgsProcessingAlgorithm):
                 path, QgsProcessingContext.LayerDetails(name, context.project() or QgsProject.instance(), name))
         return {self.FOLDER: folder, self.DNBR: dnbr, self.CLASSES: classes, self.SUMMARY: summary,
                 self.REPORT: html_path}
+
+
+def _chart(fields, rows):
+    """Horizontal bars of percent per class for each zone, in plain HTML."""
+    e = html.escape
+    zones = [n for n in fields if n.startswith('pct_')]
+    colours = {'Unburned to low': CLASS_COLORS[1], 'Low': CLASS_COLORS[2], 'Moderate': CLASS_COLORS[3],
+               'High': CLASS_COLORS[4]}
+    out = ['<div style="margin:.5rem 0 1rem">']
+    for z in zones:
+        out.append(f'<div style="margin:.4rem 0 .2rem"><b>{e(z[4:])}</b></div>')
+        for row in rows:
+            v = float(row[z] or 0)
+            colour = colours.get(str(row['sev_class']), '#888')
+            out.append(
+                f'<div style="display:flex;align-items:center;gap:.5rem;font-size:.9em">'
+                f'<span style="width:9rem">{e(str(row["sev_class"]))}</span>'
+                f'<span style="display:inline-block;height:.9rem;width:{max(v, 0.2) * 3:.1f}px;background:{colour};'
+                f'border:1px solid #999"></span><span>{v:.1f} %</span></div>')
+    out.append('</div>')
+    return ''.join(out)
 
 
 def _lower_first(text):
@@ -324,7 +367,9 @@ code{{font-size:.85em}}.note{{color:#555}}</style></head><body>
 <h1>{e(r["fire"])}: burn severity</h1>
 <p>Fire {e(r["fire_start"])} to {e(r["fire_end"])}, {e(_lower_first(r["assessment"]))}. Fire Analysis {e(r["fireanalysis_version"])}, {e(r["created"])}.</p>
 <h2>Severity by class</h2>
+{_chart(fields, rows)}
 <table><tr>{"".join(f"<th>{e(n)}</th>" for n in fields)}</tr>{rows_html}</table>
+{'<h2>Map</h2><p><img src="dnbr6.png" alt="Burn severity classes" style="max-width:100%;border:1px solid #ccc"></p><p class="note">Dark green unburned to low, aquamarine low, yellow moderate, red high, light green increased greenness, grey no data; black line: burned-area boundary.</p>' if 'dnbr6.png' in r['files'] else ''}
 {"<h2>Check</h2><ul>" + "".join(f"<li>{e(w)}</li>" for w in r["warnings"]) + "</ul>" if r["warnings"] else ""}
 <h2>Images</h2>
 <p>Pre-fire: {e(", ".join(pair["pre_granules"]))}<br>Post-fire: {e(", ".join(pair["post_granules"]))}<br>

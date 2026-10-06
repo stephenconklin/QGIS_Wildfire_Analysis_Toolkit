@@ -28,13 +28,10 @@ def nearby_fires(lon, lat, radius_km, first_year, last_year, fire_type='Wildfire
                   distance=radius_km, units='esriSRUnit_Kilometer', spatialRel='esriSpatialRelIntersects',
                   where=where, outFields=FIELDS, returnGeometry='false', f='json')
     url = BOUNDARIES + '/query?' + urllib.parse.urlencode(params)
-    for attempt in range(RETRIES):  # the service drops connections now and then
-        try:
-            data = stac._request(url, None, feedback)
-            break
-        except stac.StacError as e:
-            if attempt == RETRIES - 1:
-                raise MtbsError(f'MTBS map service request failed after {RETRIES} tries: {e}') from None
+    try:  # the service drops connections now and then
+        data = stac._request(url, None, feedback, attempts=RETRIES)
+    except stac.StacError as e:
+        raise MtbsError(f'MTBS map service request failed after {RETRIES} tries: {e}') from None
     if data is None:  # cancelled
         return []
     if 'error' in data:

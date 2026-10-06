@@ -58,6 +58,30 @@ def round5(x):
     return round(x * 200) / 200
 
 
+def write_png(classes, like, outline, path, max_size=1600):
+    """A PNG of the class raster in the MTBS colours (outside transparent), with the
+    burned-area outline in black, for reports. classes: uint8 array on like's grid;
+    outline: boolean array (pixels on the perimeter line). Thread-safe (GDAL only)."""
+    import numpy as np
+    from osgeo import gdal
+    rgba = np.zeros(classes.shape + (4,), np.uint8)
+    for code, colour in CLASS_COLORS.items():
+        c = colour.lstrip('#')
+        rgba[classes == code] = [int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16), 255]
+    rgba[classes == NON_MAPPING] = [200, 200, 200, 255]
+    rgba[outline] = [0, 0, 0, 255]
+    h, w = classes.shape
+    mem = gdal.GetDriverByName('MEM').Create('', w, h, 4, gdal.GDT_Byte)
+    for i in range(4):
+        mem.GetRasterBand(i + 1).WriteArray(rgba[:, :, i])
+    scale = min(1.0, max_size / max(w, h))
+    gdal.Translate(path, mem, format='PNG', width=max(1, int(w * scale)), height=max(1, int(h * scale)),
+                   resampleAlg='nearest')
+    aux = path + '.aux.xml'
+    if os.path.exists(aux):
+        os.remove(aux)
+
+
 def write_style(path):
     """A .qml next to the raster, so QGIS styles it with the MTBS colours on load."""
     items = '\n'.join(

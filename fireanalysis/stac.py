@@ -4,6 +4,7 @@ QgsBlockingNetworkRequest follows the QGIS proxy and SSL settings, works from
 a Processing worker thread, and stops when the feedback is cancelled.
 """
 import json
+import time
 
 from qgis.core import QgsBlockingNetworkRequest
 from qgis.PyQt.QtCore import QByteArray, QUrl
@@ -16,7 +17,18 @@ class StacError(Exception):
     pass
 
 
-def _request(url, body=None, feedback=None):
+def _request(url, body=None, feedback=None, attempts=3):
+    """GET (or POST a JSON body) and parse JSON, retrying network errors."""
+    for attempt in range(attempts):
+        try:
+            return _request_once(url, body, feedback)
+        except StacError:
+            if attempt == attempts - 1 or (feedback is not None and feedback.isCanceled()):
+                raise
+            time.sleep(2 * (attempt + 1))
+
+
+def _request_once(url, body, feedback):
     req = QNetworkRequest(QUrl(url))
     req.setRawHeader(b'Accept', b'application/geo+json, application/json')
     blocking = QgsBlockingNetworkRequest()

@@ -225,10 +225,11 @@ if len(granule_ids) == 2:
     check("pipeline: runs", res is not None, " | ".join(log[-5:]))
     if res is not None:
         want = {"nbr_pre.tif", "nbr_post.tif", "reflectance_post.tif", "dnbr.tif", "rdnbr.tif", "dnbr6.tif",
-                "dnbr6.qml", "summary.csv", "summary.gpkg", "report.html", "report.json"}
+                "dnbr6.qml", "dnbr6.png", "summary.csv", "summary.gpkg", "report.html", "report.json"}
         missing = want - set(os.listdir(folder))
         check("pipeline: every output file", not missing, f"missing {sorted(missing)}")
-        rep = json.load(open(os.path.join(folder, "report.json")))
+        with open(os.path.join(folder, "report.json"), encoding="utf-8") as f:
+            rep = json.load(f)
         check("pipeline: 4-class summary for both zones", len(rep["summary"]) == 4 and "pct_ba" in rep["summary"][0],
               str(rep["summary"])[:300])
         check("pipeline: report lists the clipped-perimeter warning",
