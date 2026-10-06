@@ -64,6 +64,8 @@ Steps: *Suggest HLS image pairs* (rank 1; all candidates in `image_pairs.csv`), 
 
 With the granule ids given it takes under a minute for the Dragon Bravo test area; the pair search adds about a minute and a half.
 
+**Severity map (PDF)** (`fireanalysis:severitymap`, also under **Pipeline**) turns the result into an A4 landscape map: the classes in MTBS colors, the burned-area outline, optional sub-areas, legend, scale bar, north arrow, the summary table, and a note of the images, thresholds and offset read from the raster's metadata, as PDF and optionally PNG. Give it `dnbr6.tif`, the burned-area polygons, the sub-areas and `summary.gpkg` from the pipeline folder. It builds the layout in a separate project, so your project is not changed. QGIS layouts must be drawn on the main thread, so QGIS waits while it runs (a few seconds); that is also why the pipeline does not make the map itself.
+
 ### Imagery
 
 **Find HLS scenes** (`fireanalysis:findhlsscenes`) searches HLS L30 (Landsat 8/9) and S30 (Sentinel-2) granules over an area of interest and date range. It needs no login.

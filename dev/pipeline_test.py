@@ -1,7 +1,7 @@
 """
 Offline test for the fireanalysis algorithms that need no network: Prepare
 local scene NBR (on synthetic Landsat and Sentinel-2 products), Build dNBR,
-Classify severity and Draft burned-area perimeter. The online HLS test is dev/online_test.py.
+Classify severity, Draft burned-area perimeter and Severity map (PDF). The online HLS test is dev/online_test.py.
 
 Inside QGIS (Python Console):
     exec(open('/path/to/QGIS_Burn_Severity/dev/pipeline_test.py').read())
@@ -44,6 +44,7 @@ from fireanalysis.algorithms.build_dnbr import BuildDnbr  # noqa: E402
 from fireanalysis.algorithms.classify_severity import ClassifySeverity, match_threshold  # noqa: E402
 from fireanalysis.algorithms.prepare_local_nbr import PrepareLocalNbr  # noqa: E402
 from fireanalysis.algorithms.draft_perimeter import DraftPerimeter, burned_mask  # noqa: E402
+from fireanalysis.algorithms.severity_map import SeverityMap  # noqa: E402
 
 gdal.UseExceptions()
 T = os.path.join(REPO, "testdata") + os.sep
@@ -386,6 +387,17 @@ if res is not None:
     iou = draft.intersection(truth).area() / draft.combine(truth).area()
     check(f"draft perimeter seeded with the test burned area overlaps it (IoU {iou:.2f})", iou > 0.5,
           " | ".join(fb.log))
+
+
+# 10. Severity map (PDF) from classes made with given thresholds
+res, log = _run(ClassifySeverity(), {"DNBR": T + "dnbr.tif", "PERIMETER": BURN, "LOW_T": 0.1, "MODERATE_T": 0.27,
+                                     "HIGH_T": 0.66, "OUTPUT": os.path.join(OUT, "classes_map.tif")})
+if res is not None:
+    pdf, png = os.path.join(OUT, "map.pdf"), os.path.join(OUT, "map.png")
+    res, log = _run(SeverityMap(), {"CLASSES": res["OUTPUT"], "PERIMETER": BURN, "SUBAREAS": GPKG + "|layername=watershed",
+                                    "TITLE": "Test map", "PDF": pdf, "PNG": png})
+    check("severity map: PDF and PNG written",
+          res is not None and os.path.getsize(pdf) > 10000 and os.path.getsize(png) > 10000, " | ".join(log))
 
 print(f"\n{'ALL PASSED' if not failed else f'{failed} FAILED'}")
 if _app is not None:

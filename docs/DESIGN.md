@@ -113,7 +113,7 @@ fetching always mosaics.
 | 5 | Perimeter draft | `fireanalysis:draftperimeter` | done (2.0.0-dev) |
 | 6 | Whole pipeline in one step, with report | `fireanalysis:hlsburnseverity` | done (2.0.0-dev); layout PDF still to do |
 | 5 | Burn severity summary | `fireanalysis:burnseveritysummary` | done (1.1.0) |
-| 6 | Layout PDF (map, chart) | | |
+| 6 | Layout PDF (map, legend, summary, provenance) | `fireanalysis:severitymap` | done (2.0.0-dev) |
 
 **Find HLS scenes.** Inputs: AOI polygons, start and end dates, sensors
 (L30, S30), maximum scene cloud cover. Output: footprint polygons (EPSG:4326),
