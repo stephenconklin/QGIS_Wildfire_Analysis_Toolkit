@@ -200,7 +200,8 @@ class HlsBurnSeverity(QgsProcessingAlgorithm):
                 'MIN_CLEAR': self.parameterAsInt(parameters, self.MIN_CLEAR, context), 'COUNT': 5,
                 'OUTPUT': os.path.join(folder, 'image_pairs.csv')}, context, steps, log)
             layer = QgsProcessingUtils.mapLayerFromString(res['OUTPUT'], context)
-            best = next((f for f in layer.getFeatures() if f['rank'] == 1), None) if layer else None
+            # image_pairs.csv comes back with text fields, so compare the rank as a number
+            best = next((f for f in layer.getFeatures() if int(float(str(f['rank']))) == 1), None) if layer else None
             if best is None:
                 raise QgsProcessingException('No image pair found; see the log, or give the granule ids.')
             pre_g, post_g = str(best['pre_granules']), str(best['post_granules'])

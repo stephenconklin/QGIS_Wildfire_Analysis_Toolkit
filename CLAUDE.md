@@ -28,7 +28,7 @@ The repository is local only so far: no remote, nothing pushed. Plugin metadata 
 | `dev/run_headless.sh` | Runs a dev script (default `smoke_test.py`; second argument, e.g. `online_test.py`) with a QGIS macOS app's bundled Python (sets `PYTHONHOME`, `PYTHONPATH`, `PROJ_DATA`, offscreen Qt). Default app `/Applications/QGIS.app`. |
 | `dev/make_testdata.py` | Rebuilds `testdata/` from the full Lab 6 data (run inside QGIS). |
 | `testdata/` | About 6 MB: `dnbr.tif`, `prefire_nbr.tif` and `testdata.gpkg` (layers `burn_area`, `watershed`, `subareas`), plus a README with expected counts and data sources. `.gitignore` excludes GIS files except these. |
-| `docs/images/` | README images: `severity_map.png` (rendered offscreen in a separate `QgsProject` from a full-data run, severity clipped to zone A), `chart.png` (the Lab 6 layout chart, `Severity_Chart_600dpi_white_bg.png`, resized to 1200 px), `dialog.png` (the tool dialog with test-data inputs, 900 px). |
+| `docs/images/` | README images: `pipeline_map.png` (Severity map (PDF) of the test area from the pipeline with granules given, nearby-MTBS thresholds; 1200 px), plus `severity_map.png` (rendered offscreen in a separate `QgsProject` from a full-data run, severity clipped to zone A), `chart.png` (the Lab 6 layout chart, `Severity_Chart_600dpi_white_bg.png`, resized to 1200 px), `dialog.png` (the tool dialog with test-data inputs, 900 px). |
 | `LICENSE` | MIT. |
 
 ## Identity — do not change casually

@@ -239,6 +239,19 @@ if len(granule_ids) == 2:
               any("looks burned" in w for w in rep["warnings"]), str(rep["warnings"]))
         print("      thresholds: " + ", ".join(f"{k} {rep['thresholds'][k]:.3f}" for k in ("low", "moderate", "high"))
               + f"; cross-check {rep['thresholds'].get('alternative')}")
+    # ... and with the image pair chosen by Suggest HLS image pairs
+    folder = os.path.join(OUT, "pipeline_auto")
+    res, _, log = _run(HlsBurnSeverity(), {
+        "PERIMETER": AOI, "FIRE_NAME": "Dragon Bravo", "FIRE_START": QDate(2025, 7, 4), "FIRE_END": QDate(2025, 9, 1),
+        "OUTPUT_FOLDER": folder})
+    check("pipeline with a suggested pair: runs", res is not None, " | ".join(log[-5:]))
+    if res is not None:
+        with open(os.path.join(folder, "report.json"), encoding="utf-8") as f:
+            pair = json.load(f)["pair"]
+        check(f"pipeline with a suggested pair: {pair.get('pre_date')} {pair.get('pre_sensor')} / "
+              f"{pair.get('post_date')} {pair.get('post_sensor')}",
+              pair.get("pre_date", "") < "2025-07-04" <= pair.get("post_date", "") and
+              os.path.exists(os.path.join(folder, "image_pairs.csv")), str(pair))
 
 # Planetary Computer: Landsat 9 on the post-fire date, against HLS L30 of the same acquisition
 if "post" in nbr:
