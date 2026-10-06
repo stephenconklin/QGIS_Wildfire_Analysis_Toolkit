@@ -84,7 +84,7 @@ class SeverityMap(QgsProcessingAlgorithm):
     def shortHelpString(self):
         return (
             '<p>Makes an A4 landscape map of the MTBS severity classes (from <i>Classify severity</i> or '
-            '<i>Burn severity from HLS</i>, <code>dnbr6.tif</code>) with the burned-area outline, optional '
+            '<i>Burn severity (whole pipeline)</i>, <code>dnbr6.tif</code>) with the burned-area outline, optional '
             'sub-areas, a legend, scale bar and north arrow, the area summary table, and a note of the '
             'images, offset and thresholds read from the raster metadata. Exports PDF and, optionally, '
             'PNG. The layout is built in a separate project, so the current project is not changed.</p>'

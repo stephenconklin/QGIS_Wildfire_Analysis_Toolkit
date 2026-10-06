@@ -107,7 +107,7 @@ class FetchHlsNbr(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterFeatureSource(
             self.SCENES, 'HLS scenes (from Find HLS scenes; one date)', [polygon_source()], optional=True))
         self.addParameter(QgsProcessingParameterString(
-            self.GRANULES, 'Or: granule ids, separated by spaces (e.g. from Suggest HLS image pairs)',
+            self.GRANULES, 'Or: granule ids, separated by spaces (e.g. from Suggest image pairs)',
             optional=True))
         self.addParameter(QgsProcessingParameterNumber(
             self.BUFFER, 'Buffer around the AOI (m)', type=double_type(),

@@ -1,4 +1,4 @@
-"""Burn severity from HLS: the whole pipeline in one algorithm. Image pair ->
+"""Burn severity (whole pipeline): one algorithm from fire to report. Image pair ->
 pre/post NBR -> dNBR, RdNBR and offset -> MTBS classes -> area summary ->
 report, all written to one folder."""
 import csv
@@ -21,7 +21,8 @@ from ..compat import advanced, date_type, double_type, integer_type, polygon_sou
 from .build_dnbr import BuildDnbr
 from .classify_severity import CLASS_COLORS, ESTIMATES, NEARBY, NONE_VALUE, OWN_DATA, ClassifySeverity, write_png
 from .fetch_hls_nbr import FetchHlsNbr
-from .suggest_hls_pairs import ASSESSMENTS, INITIAL, SuggestHlsPairs
+from .planetary_algorithms import FetchPlanetaryNbr
+from .suggest_image_pairs import ASSESSMENTS, INITIAL, SOURCES, SuggestImagePairs
 
 CLASSES = ['Unburned to low', 'Low', 'Moderate', 'High']
 
@@ -37,7 +38,8 @@ def _summary_algorithm():
     return mod.BurnSeveritySummary()
 
 
-class HlsBurnSeverity(QgsProcessingAlgorithm):
+class BurnSeverityPipeline(QgsProcessingAlgorithm):
+    SOURCE = 'SOURCE'
     PERIMETER = 'PERIMETER'
     FIRE_NAME = 'FIRE_NAME'
     FIRE_START = 'FIRE_START'
@@ -61,10 +63,10 @@ class HlsBurnSeverity(QgsProcessingAlgorithm):
     REPORT = 'REPORT'
 
     def name(self):
-        return 'hlsburnseverity'
+        return 'burnseveritypipeline'
 
     def displayName(self):
-        return 'Burn severity from HLS (whole pipeline)'
+        return 'Burn severity (whole pipeline)'
 
     def group(self):
         return 'Pipeline'
@@ -75,18 +77,20 @@ class HlsBurnSeverity(QgsProcessingAlgorithm):
     def shortHelpString(self):
         return (
             '<p>Runs the whole assessment for a fire from its burned-area polygons and dates:</p><ol>'
-            '<li><i>Suggest HLS image pairs</i> picks the best-ranked pre/post pair (skipped when you '
-            'give the granule ids);</li>'
-            '<li><i>Fetch HLS NBR</i> for both dates (3 km buffer, UTM grid), with the post-fire '
-            'SWIR2/NIR/red reflectance for display;</li>'
+            '<li><i>Suggest image pairs</i> picks the best-ranked pre/post pair (skipped when you '
+            'give the ids);</li>'
+            '<li><i>Fetch HLS NBR</i> or <i>Fetch Landsat / Sentinel-2 NBR</i> for both dates (3 km '
+            'buffer, UTM grid), with the post-fire SWIR2/NIR/red reflectance for display;</li>'
             '<li><i>Build dNBR</i>: dNBR, RdNBR and the offset from a ring outside the burned area;</li>'
             '<li><i>Classify severity (MTBS classes)</i> with your or estimated thresholds;</li>'
             '<li><i>Burn severity summary</i>: percent, hectares and acres per class for the fire and '
             'its sub-areas;</li>'
             '<li>a report (report.html, report.json) of every input, scene, calibration, offset, '
             'threshold and result.</li></ol>'
-            '<p>Everything is written to the output folder. Needs the Earthdata login in ~/.netrc. '
-            'Choosing the pair reads Fmask for every candidate date and can take several minutes.</p>'
+            '<p><b>Imagery:</b> NASA HLS (default; from 2013; needs the Earthdata login in ~/.netrc), or '
+            'Landsat 4–9 Collection 2 (from 1982) or Sentinel-2 L2A through Planetary Computer (no '
+            'account). Everything is written to the output folder. Choosing the pair reads the quality '
+            'band of every candidate date, about a minute or two.</p>'
             '<p>Validated against 17 MTBS fires: with MTBS\'s thresholds the classes agree with MTBS '
             'at kappa 0.78; estimated thresholds are a starting point (kappa about 0.56). See the '
             'README.</p>'
@@ -98,6 +102,8 @@ class HlsBurnSeverity(QgsProcessingAlgorithm):
     def initAlgorithm(self, config=None):
         self.addParameter(QgsProcessingParameterFeatureSource(
             self.PERIMETER, 'Burned-area polygons', [polygon_source()]))
+        self.addParameter(QgsProcessingParameterEnum(
+            self.SOURCE, 'Imagery', options=[s[1] for s in SOURCES], defaultValue=0))
         self.addParameter(QgsProcessingParameterString(self.FIRE_NAME, 'Fire name', 'Fire'))
         self.addParameter(QgsProcessingParameterDateTime(self.FIRE_START, 'Fire start (ignition) date',
                                                          type=date_type()))
@@ -118,9 +124,9 @@ class HlsBurnSeverity(QgsProcessingAlgorithm):
             self.addParameter(QgsProcessingParameterNumber(
                 name, f'{label} threshold (raw dNBR; empty = estimate)', type=double_type(), optional=True))
         self.addParameter(advanced(QgsProcessingParameterString(
-            self.PRE_GRANULES, 'Pre-fire granule ids (instead of suggesting a pair)', optional=True)))
+            self.PRE_GRANULES, 'Pre-fire granule or item ids (instead of suggesting a pair)', optional=True)))
         self.addParameter(advanced(QgsProcessingParameterString(
-            self.POST_GRANULES, 'Post-fire granule ids (instead of suggesting a pair)', optional=True)))
+            self.POST_GRANULES, 'Post-fire granule or item ids (instead of suggesting a pair)', optional=True)))
         self.addParameter(advanced(QgsProcessingParameterNumber(
             self.MIN_CLEAR, 'Minimum clear share inside the area for a suggested pair (%)', type=integer_type(),
             minValue=0, maxValue=100, defaultValue=95)))
@@ -177,17 +183,20 @@ class HlsBurnSeverity(QgsProcessingAlgorithm):
     def processAlgorithm(self, parameters, context, feedback):
         folder = self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
         if folder == QgsProcessing.TEMPORARY_OUTPUT or not folder:
-            folder = QgsProcessingUtils.generateTempFilename('hls_burn_severity')
+            folder = QgsProcessingUtils.generateTempFilename('burn_severity')
         os.makedirs(folder, exist_ok=True)
         fire = self.parameterAsString(parameters, self.FIRE_NAME, context).strip() or 'Fire'
         start = self.parameterAsDateTime(parameters, self.FIRE_START, context).date()
         end = self.parameterAsDateTime(parameters, self.FIRE_END, context).date()
         assessment = self.parameterAsEnum(parameters, self.ASSESSMENT, context)
         perimeter = parameters[self.PERIMETER]
+        source_index = self.parameterAsEnum(parameters, self.SOURCE, context)
+        source = SOURCES[source_index][0]
         steps = QgsProcessingMultiStepFeedback(6, feedback)
         log, report = {}, {'fireanalysis_version': VERSION, 'created': datetime.datetime.now().isoformat(timespec='seconds'),
                            'fire': fire, 'fire_start': start.toString('yyyy-MM-dd'),
-                           'fire_end': end.toString('yyyy-MM-dd'), 'assessment': ASSESSMENTS[assessment]}
+                           'fire_end': end.toString('yyyy-MM-dd'), 'assessment': ASSESSMENTS[assessment],
+                           'imagery': SOURCES[source_index][1]}
 
         # 1. Image pair
         pre_g = (self.parameterAsString(parameters, self.PRE_GRANULES, context) or '').strip()
@@ -195,8 +204,8 @@ class HlsBurnSeverity(QgsProcessingAlgorithm):
         if bool(pre_g) != bool(post_g):
             raise QgsProcessingException('Give both the pre-fire and the post-fire granule ids, or neither.')
         if not pre_g:
-            res = self._child(SuggestHlsPairs(), {
-                'AOI': perimeter, 'FIRE_START': start, 'FIRE_END': end, 'ASSESSMENT': assessment,
+            res = self._child(SuggestImagePairs(), {
+                'SOURCE': source_index, 'AOI': perimeter, 'FIRE_START': start, 'FIRE_END': end, 'ASSESSMENT': assessment,
                 'MIN_CLEAR': self.parameterAsInt(parameters, self.MIN_CLEAR, context), 'COUNT': 5,
                 'OUTPUT': os.path.join(folder, 'image_pairs.csv')}, context, steps, log)
             layer = QgsProcessingUtils.mapLayerFromString(res['OUTPUT'], context)
@@ -207,19 +216,23 @@ class HlsBurnSeverity(QgsProcessingAlgorithm):
             pre_g, post_g = str(best['pre_granules']), str(best['post_granules'])
             report['pair'] = {k: best[k] for k in ('pre_date', 'pre_sensor', 'pre_clear', 'post_date', 'post_sensor',
                                                    'post_clear', 'doy_gap', 'years')}
-            report['pair']['source'] = 'Suggest HLS image pairs, rank 1 (others in image_pairs.csv)'
+            report['pair']['source'] = 'Suggest image pairs, rank 1 (others in image_pairs.csv)'
         else:
-            report['pair'] = {'source': 'granule ids given'}
+            report['pair'] = {'source': 'ids given'}
         report['pair'].update({'pre_granules': pre_g.split(), 'post_granules': post_g.split()})
         steps.setCurrentStep(1)
 
         # 2. NBR for both dates
         nbr = {}
         for label, granules in (('pre', pre_g), ('post', post_g)):
-            params = {'AOI': perimeter, 'GRANULES': granules, 'NBR': os.path.join(folder, f'nbr_{label}.tif')}
+            params = {'AOI': perimeter, 'NBR': os.path.join(folder, f'nbr_{label}.tif')}
             if label == 'post':
                 params['REFLECTANCE'] = os.path.join(folder, 'reflectance_post.tif')
-            res = self._child(FetchHlsNbr(), params, context, steps, log)
+            if source == 'hls':
+                res = self._child(FetchHlsNbr(), dict(params, GRANULES=granules), context, steps, log)
+            else:
+                res = self._child(FetchPlanetaryNbr(), dict(params, ITEMS=granules, SOURCE=source_index - 1),
+                                  context, steps, log)
             nbr[label] = res['NBR']
         steps.setCurrentStep(2)
 
@@ -373,7 +386,7 @@ code{{font-size:.85em}}.note{{color:#555}}</style></head><body>
 {"<h2>Check</h2><ul>" + "".join(f"<li>{e(w)}</li>" for w in r["warnings"]) + "</ul>" if r["warnings"] else ""}
 <h2>Images</h2>
 <p>Pre-fire: {e(", ".join(pair["pre_granules"]))}<br>Post-fire: {e(", ".join(pair["post_granules"]))}<br>
-<span class="note">{e(pair["source"])}. NASA HLS v2.0, surface reflectance x 0.0001, Fmask cloud, adjacent cloud, shadow, snow and water masked.</span></p>
+<span class="note">{e(pair["source"])}. {e(r["imagery"])}; calibrated to surface reflectance from the product metadata; cloud, adjacent cloud, shadow, snow and water masked.</span></p>
 <h2>dNBR offset and thresholds</h2>
 <p>Offset {r["offset"]["value"]:.3f} (standard deviation {r["offset"]["std"]:.3f}, {r["offset"]["pixels"]:,} pixels; {e(r["offset"]["method"])}).</p>
 <p>Low {thr(t["low"])}, moderate {thr(t["moderate"])}, high {thr(t["high"])} (raw dNBR, x1000 in brackets).</p>

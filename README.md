@@ -43,7 +43,7 @@ Try it on the bundled [test data](testdata/README.md):
 
 Leave everything else at the defaults and click **Run**. The Bright Angel row of the zonal histogram should read 3,997 / 78,398 / 57,213 / 16,001 / 9 pixels.
 
-**The pipeline**, with an Earthdata login in `~/.netrc`: open **Fire Analysis › Pipeline › Burn severity from HLS** and set
+**The pipeline**, with an Earthdata login in `~/.netrc`: open **Fire Analysis › Pipeline › Burn severity (whole pipeline)** and set
 
 | Parameter | Value |
 |---|---|
@@ -65,24 +65,25 @@ Version 2.0 grows the plugin into a fire analysis pipeline modeled on the MTBS [
 
 Checked against 17 published MTBS fires: the imagery and calibration reproduce MTBS's classes (mean kappa 0.78); threshold estimates are a starting point (see *Validation against MTBS* below).
 
-### One step: Burn severity from HLS
+### One step: Burn severity (whole pipeline)
 
-**Burn severity from HLS (whole pipeline)** (`fireanalysis:hlsburnseverity`, under **Fire Analysis › Pipeline**) runs everything below from a fire's burned-area polygons and dates, and writes the results to one folder.
+**Burn severity (whole pipeline)** (`fireanalysis:burnseveritypipeline`, under **Fire Analysis › Pipeline**) runs everything below from a fire's burned-area polygons and dates, and writes the results to one folder.
 
 | Parameter | Description |
 |---|---|
 | Burned-area polygons | The fire. Also the area of interest for the imagery. |
+| Imagery | NASA HLS (default; 2013 on; Earthdata login), Landsat 4–9 Collection 2 (1982 on) or Sentinel-2 L2A, both from Planetary Computer without an account. |
 | Fire name | Zone name in the summary and the report. |
 | Fire start, Fire end | Ignition and containment dates, for choosing the image pair. |
 | Assessment | Initial (soon after the fire) or extended (next growing season). |
 | Sub-area polygons, name field, name | Optional zones for the summary, as in *Burn severity summary*. |
 | Estimate empty thresholds from; Low, Moderate, High threshold | As in *Classify severity*. |
-| Pre-fire, Post-fire granule ids (Advanced) | Skip the pair search and use these. |
+| Pre-fire, Post-fire granule or item ids (Advanced) | Skip the pair search and use these. |
 | Output folder | Where everything goes. |
 
-Steps: *Suggest HLS image pairs* (rank 1; all candidates in `image_pairs.csv`), *Fetch HLS NBR* for both dates, *Build dNBR* (ring offset), *Classify severity*, *Burn severity summary* with the classification's thresholds. The folder holds `nbr_pre.tif`, `nbr_post.tif`, `reflectance_post.tif` (SWIR2/NIR/red, for checking the classes), `dnbr.tif`, `rdnbr.tif`, `rbr.tif`, `dnbr6.tif` with its MTBS style, `summary.gpkg` and `summary.csv`, zones and histogram, `dnbr6.png` (the classes with the burned-area outline), and `report.html` (with a bar chart and the map) and `report.json`: scenes, calibration, offset, thresholds and how they were chosen, the other estimate method's thresholds as a cross-check, every warning, and the summary. When the two threshold estimates disagree on the high threshold by more than 0.1, the report says so. The dNBR and the classes load into the project when it finishes.
+Steps: *Suggest image pairs* (rank 1; all candidates in `image_pairs.csv`), *Fetch HLS NBR* or *Fetch Landsat / Sentinel-2 NBR* for both dates, *Build dNBR* (ring offset), *Classify severity*, *Burn severity summary* with the classification's thresholds. The folder holds `nbr_pre.tif`, `nbr_post.tif`, `reflectance_post.tif` (SWIR2/NIR/red, for checking the classes), `dnbr.tif`, `rdnbr.tif`, `rbr.tif`, `dnbr6.tif` with its MTBS style, `summary.gpkg` and `summary.csv`, zones and histogram, `dnbr6.png` (the classes with the burned-area outline), and `report.html` (with a bar chart and the map) and `report.json`: scenes, calibration, offset, thresholds and how they were chosen, the other estimate method's thresholds as a cross-check, every warning, and the summary. When the two threshold estimates disagree on the high threshold by more than 0.1, the report says so. The dNBR and the classes load into the project when it finishes.
 
-With the granule ids given it takes under a minute for the Dragon Bravo test area; the pair search adds about a minute and a half.
+With the granule ids given it takes under a minute for the Dragon Bravo test area; the pair search adds about a minute and a half. For a historical fire, choose Landsat: for the Schultz Fire (2010, extended assessment) it picked Landsat 5 on 2011-06-13, the post-fire scene MTBS used, and a pre-fire scene a month from MTBS's, in 48 seconds.
 
 **Severity map (PDF)** (`fireanalysis:severitymap`, also under **Pipeline**) turns the result into an A4 landscape map: the classes in MTBS colors, the burned-area outline, optional sub-areas, legend, scale bar, north arrow, the summary table, and a note of the images, thresholds and offset read from the raster's metadata, as PDF and optionally PNG. Give it `dnbr6.tif`, the burned-area polygons, the sub-areas and `summary.gpkg` from the pipeline folder. It builds the layout in a separate project, so your project is not changed. QGIS layouts must be drawn on the main thread, so QGIS waits while it runs (a few seconds); that is also why the pipeline does not make the map itself.
 
@@ -100,7 +101,7 @@ With the granule ids given it takes under a minute for the Dragon Bravo test are
 
 Output: one footprint per granule with `granule`, `sensor`, `tile`, `date`, `doy`, `cloud` (scene %), `aoi_pct` (share of the AOI inside the footprint), and, when measured, `aoi_clear` and `aoi_data`: the share of the AOI that is clear (no cloud, adjacent cloud, shadow or snow) and that has data on that date, all tiles together. Tile-wide cloud cover says little about a small fire; `aoi_clear` is what matters.
 
-**Suggest HLS image pairs** (`fireanalysis:suggesthlspairs`) chooses the dates for you, following the MTBS rules: post-fire dates soon after the fire (initial assessment, default up to 60 days after it ends) or in the next growing season (extended, June to September of the following year); pre-fire dates in the same season (default within 30 days of year) in the 1 to 2 years before. Both must be at least 95 % clear inside the area (default). It returns a ranked table (`rank`, `pre_date`, `pre_sensor`, `pre_clear`, `post_date`, `post_sensor`, `post_clear`, `doy_gap`, `years`, `pre_granules`, `post_granules`), ranked by the season gap in 5-day steps, then fewer years apart, then the clearer pair, then the earliest post-fire date. Copy `pre_granules` and `post_granules` into *Fetch HLS NBR*. It reads Fmask for every candidate date, six at a time: about 1.5 minutes for the 120 candidate dates around Dragon Bravo, where the Lab 6 pair (Sentinel-2 2024-09-13, Landsat 9 2025-09-15) ranks second.
+**Suggest image pairs** (`fireanalysis:suggestimagepairs`) chooses the dates for you, from HLS or (Imagery parameter) Planetary Computer Landsat or Sentinel-2, following the MTBS rules: post-fire dates soon after the fire (initial assessment, default up to 60 days after it ends) or in the next growing season (extended, June to September of the following year); pre-fire dates in the same season (default within 30 days of year) in the 1 to 2 years before. Both must be at least 95 % clear inside the area (default). It returns a ranked table (`rank`, `source`, `pre_date`, `pre_sensor`, `pre_clear`, `post_date`, `post_sensor`, `post_clear`, `doy_gap`, `years`, `pre_granules`, `post_granules`), ranked by the season gap in 5-day steps, then fewer years apart, then the clearer pair, then the earliest post-fire date. Copy `pre_granules` and `post_granules` into *Fetch HLS NBR* or *Fetch Landsat / Sentinel-2 NBR*. It reads Fmask for every candidate date, six at a time: about 1.5 minutes for the 120 candidate dates around Dragon Bravo, where the Lab 6 pair (Sentinel-2 2024-09-13, Landsat 9 2025-09-15) ranks second.
 
 **Fetch HLS NBR** (`fireanalysis:fetchhlsnbr`) reads only the AOI window of the chosen granules, mosaics their tiles, masks clouds and writes NBR.
 
@@ -108,7 +109,7 @@ Output: one footprint per granule with `granule`, `sensor`, `tile`, `date`, `doy
 |---|---|
 | Area of interest | The same polygons. |
 | HLS scenes | Output of *Find HLS scenes*, or a selection from it: all of one date and one sensor. Select every tile of that date that the AOI touches. |
-| Or: granule ids | Instead of the layer: granule ids separated by spaces, such as `pre_granules` from *Suggest HLS image pairs*. |
+| Or: granule ids | Instead of the layer: granule ids separated by spaces, such as `pre_granules` from *Suggest image pairs*. |
 | Buffer around the AOI (m) | Default 3,000, the margin MTBS uses to estimate the unburned dNBR offset. |
 | Target CRS | Empty means the UTM zone of the AOI. |
 | Fmask classes to mask | Default cloud, adjacent to cloud, cloud shadow, snow/ice and water. Cirrus and high aerosol (often smoke) are optional. |

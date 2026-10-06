@@ -9,7 +9,7 @@ from qgis.core import (QgsCoordinateReferenceSystem, QgsDistanceArea, QgsFeature
                        QgsProcessingParameterFeatureSource, QgsProcessingParameterNumber,
                        QgsProcessingParameterRasterDestination, QgsProcessingParameterString)
 
-from .. import VERSION, planetary, raster, stac
+from .. import VERSION, planetary, stac
 from ..compat import date_type, double_type, field, integer_type, polygon_source, polygon_wkb, warn
 from .find_hls_scenes import WGS84, aoi_geometry
 from .prepare_local_nbr import MASK_CLASSES, write_scene_nbr
@@ -21,17 +21,23 @@ CLEAR_FLAGS = {'cloud', 'adjacent', 'shadow', 'snow'}
 
 def scene_clear_share(scene, aoi, context, feedback):
     """(clear %, data %) of the AOI for one date, from QA_PIXEL or SCL on a 30 m grid."""
+    from .fetch_hls_nbr import aoi_grid
+    return scene_clear_share_on(scene, aoi_grid(aoi, context.transformContext()), feedback)
+
+
+def scene_clear_share_on(scene, grid, feedback):
+    """scene_clear_share on a grid from fetch_hls_nbr.aoi_grid; safe in worker threads
+    (GDAL reads only; the scene's URLs are already signed)."""
     from osgeo import gdal
     if not scene.qa:
         return None, None
-    crs, bounds, ncols, nrows = raster.analysis_grid(aoi, None, 0, 30.0, context.transformContext())
-    ds = gdal.Warp('', scene.qa, format='MEM', outputBounds=bounds, width=ncols, height=nrows,
-                   dstSRS=raster.crs_wkt(crs), resampleAlg='near', srcNodata=None, dstNodata=None,
+    inside = grid['inside']
+    ds = gdal.Warp('', scene.qa, format='MEM', outputBounds=grid['bounds'], width=inside.shape[1],
+                   height=inside.shape[0], dstSRS=grid['wkt'], resampleAlg='near', srcNodata=None, dstNodata=None,
                    outputType=gdal.GDT_UInt16, callback=lambda *_: 0 if feedback.isCanceled() else 1)
     if ds is None:
         return None, None
     qa = ds.GetRasterBand(1).ReadAsArray()
-    inside = raster.rasterize(aoi, QgsCoordinateReferenceSystem(WGS84), ds, context.transformContext())
     flagged, fill = scene.qa_mask(qa, CLEAR_FLAGS)
     if scene.kind == 'landsat':
         fill |= qa == 0  # outside the scene

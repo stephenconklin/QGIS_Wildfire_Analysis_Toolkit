@@ -108,10 +108,10 @@ fetching always mosaics.
 | 2 | Prepare local scene NBR (Landsat C2 L2, ARD, Sentinel-2 L2A) | `fireanalysis:preparelocalnbr` | done (2.0.0-dev) |
 | 3 | Planetary Computer (Landsat C2 L2, Sentinel-2 L2A) | `fireanalysis:findplanetaryscenes`, `fireanalysis:fetchplanetarynbr` | done (2.0.0-dev) |
 | 3 | Earth Search provider | | not needed so far |
-| 4 | Scene pair suggestion (AOI-clear %, day-of-year match) | `fireanalysis:suggesthlspairs` | done (2.0.0-dev) |
+| 4 | Scene pair suggestion (AOI-clear %, day-of-year match; HLS or Planetary Computer) | `fireanalysis:suggestimagepairs` | done (2.0.0-dev) |
 | 5 | Threshold estimates and `dnbr6` | `fireanalysis:classifyseverity` | done (2.0.0-dev) |
 | 5 | Perimeter draft | `fireanalysis:draftperimeter` | done (2.0.0-dev) |
-| 6 | Whole pipeline in one step, with report | `fireanalysis:hlsburnseverity` | done (2.0.0-dev); layout PDF still to do |
+| 6 | Whole pipeline in one step, with report (HLS or Planetary Computer) | `fireanalysis:burnseveritypipeline` | done (2.0.0-dev) |
 | 5 | Burn severity summary | `fireanalysis:burnseveritysummary` | done (1.1.0) |
 | 6 | Layout PDF (map, legend, summary, provenance) | `fireanalysis:severitymap` | done (2.0.0-dev) |
 

@@ -16,7 +16,7 @@ Uses the test-data burned area (Dragon Bravo, clipped) as the AOI:
   3. A missing netrc file stops the fetch with a clear message.
   4. Build dNBR with the ring offset, then Burn severity summary on the result:
      the whole pipeline from search to summary table.
-  5. Burn severity from HLS (the one-step pipeline) with the same granules:
+  5. Burn severity (whole pipeline), from HLS, with the same granules:
      every output file, a 4-class summary and a report with the warnings.
   6. Planetary Computer: the same Landsat 9 acquisition (2025-09-15) through
      Find and Fetch Landsat / Sentinel-2 must match the HLS post-fire NBR.
@@ -49,7 +49,7 @@ from fireanalysis import VERSION  # noqa: E402
 from fireanalysis.algorithms.build_dnbr import BuildDnbr  # noqa: E402
 from fireanalysis.algorithms.fetch_hls_nbr import FetchHlsNbr  # noqa: E402
 from fireanalysis.algorithms.find_hls_scenes import FindHlsScenes  # noqa: E402
-from fireanalysis.algorithms.hls_burn_severity import HlsBurnSeverity  # noqa: E402
+from fireanalysis.algorithms.burn_severity_pipeline import BurnSeverityPipeline  # noqa: E402
 from fireanalysis.algorithms.planetary_algorithms import FetchPlanetaryNbr, FindPlanetaryScenes  # noqa: E402
 from fireanalysis.algorithms.prepare_local_nbr import PrepareLocalNbr  # noqa: E402
 
@@ -220,7 +220,7 @@ if len(nbr) == 2:
 if len(granule_ids) == 2:
     import json
     folder = os.path.join(OUT, "pipeline")
-    res, _, log = _run(HlsBurnSeverity(), {
+    res, _, log = _run(BurnSeverityPipeline(), {
         "PERIMETER": AOI, "FIRE_NAME": "Dragon Bravo", "FIRE_START": QDate(2025, 7, 4), "FIRE_END": QDate(2025, 9, 1),
         "SUBAREAS": os.path.join(REPO, "testdata", "testdata.gpkg") + "|layername=watershed", "SUBAREA_NAME": "Bright Angel",
         "PRE_GRANULES": granule_ids["pre"], "POST_GRANULES": granule_ids["post"],
@@ -239,9 +239,9 @@ if len(granule_ids) == 2:
               any("looks burned" in w for w in rep["warnings"]), str(rep["warnings"]))
         print("      thresholds: " + ", ".join(f"{k} {rep['thresholds'][k]:.3f}" for k in ("low", "moderate", "high"))
               + f"; cross-check {rep['thresholds'].get('alternative')}")
-    # ... and with the image pair chosen by Suggest HLS image pairs
+    # ... and with the image pair chosen by Suggest image pairs
     folder = os.path.join(OUT, "pipeline_auto")
-    res, _, log = _run(HlsBurnSeverity(), {
+    res, _, log = _run(BurnSeverityPipeline(), {
         "PERIMETER": AOI, "FIRE_NAME": "Dragon Bravo", "FIRE_START": QDate(2025, 7, 4), "FIRE_END": QDate(2025, 9, 1),
         "OUTPUT_FOLDER": folder})
     check("pipeline with a suggested pair: runs", res is not None, " | ".join(log[-5:]))
@@ -252,6 +252,18 @@ if len(granule_ids) == 2:
               f"{pair.get('post_date')} {pair.get('post_sensor')}",
               pair.get("pre_date", "") < "2025-07-04" <= pair.get("post_date", "") and
               os.path.exists(os.path.join(folder, "image_pairs.csv")), str(pair))
+    # ... and from Planetary Computer Landsat, no login
+    folder = os.path.join(OUT, "pipeline_pc")
+    res, _, log = _run(BurnSeverityPipeline(), {
+        "PERIMETER": AOI, "FIRE_NAME": "Dragon Bravo", "SOURCE": 1, "FIRE_START": QDate(2025, 7, 4),
+        "FIRE_END": QDate(2025, 9, 1), "OUTPUT_FOLDER": folder})
+    check("pipeline from Planetary Computer Landsat: runs", res is not None, " | ".join(log[-5:]))
+    if res is not None:
+        with open(os.path.join(folder, "report.json"), encoding="utf-8") as f:
+            pair = json.load(f)["pair"]
+        check(f"pipeline from Planetary Computer: Landsat pair {pair.get('pre_date')} {pair.get('pre_sensor')} / "
+              f"{pair.get('post_date')} {pair.get('post_sensor')}",
+              str(pair.get("pre_sensor", "")).startswith("L") and pair.get("post_date", "") >= "2025-09-01", str(pair))
 
 # Planetary Computer: Landsat 9 on the post-fire date, against HLS L30 of the same acquisition
 if "post" in nbr:
