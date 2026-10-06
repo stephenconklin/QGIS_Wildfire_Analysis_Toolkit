@@ -1,4 +1,4 @@
-"""Registers the Fire Analysis Processing provider; the plugin adds no other GUI."""
+"""Registers the Wildfire Analysis Toolkit Processing provider; the plugin adds no other GUI."""
 from qgis.core import QgsApplication
 
 from .provider import FireAnalysisProvider

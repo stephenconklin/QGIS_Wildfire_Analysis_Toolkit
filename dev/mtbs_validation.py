@@ -307,7 +307,7 @@ def validate(fire_id, year):
             "share_ours": share_ours.tolist(), "confusion": confusion.tolist(), "warnings": warnings}
 
 
-print(f"Fire Analysis {VERSION} MTBS validation on QGIS {Qgis.QGIS_VERSION}; outputs in {OUT}")
+print(f"Wildfire Analysis Toolkit {VERSION} MTBS validation on QGIS {Qgis.QGIS_VERSION}; outputs in {OUT}")
 report = []
 ALL = FIRES + HISTORICAL
 ONLY = [a for a in sys.argv[1:] if a in {f for f, _ in ALL}]  # optional: fire ids to run

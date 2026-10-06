@@ -1,6 +1,6 @@
-# QGIS Burn Severity Summary
+# Wildfire Analysis Toolkit
 
-QGIS Processing tools for wildfire burn severity, in two parts:
+The Wildfire Analysis Toolkit is a set of QGIS Processing tools for wildfire burn severity, in two parts:
 
 - **Burn severity summary**, a single script (also in the plugin): classifies a dNBR raster (or RdNBR or RBR) and reports how much of a burned area, and of any sub-areas inside it, falls in each class, as percent, hectares and acres. One dialog replaces about a dozen manual steps (fix geometries, dissolve, intersect, tag, merge, reclassify, zonal histogram, field calculations and reshaping), and the last output is a one-row-per-class table ready for a QGIS layout bar chart.
 - **The fire analysis pipeline** (plugin, version 2.0 in development): from a fire's perimeter and dates to calibrated satellite imagery, dNBR, MTBS-style severity classes, area summaries, a map and a report, modeled on the MTBS [QGIS Fire Mapping Tool](https://www.mtbs.gov/qgis-fire-mapping-tool). Imagery comes from NASA HLS, Microsoft Planetary Computer (Landsat 1982 on, Sentinel-2) or your own downloads, and is calibrated from its metadata. Validated against 23 published MTBS fires. See [Fire analysis pipeline](#fire-analysis-pipeline-plugin-only-in-development).
@@ -25,7 +25,7 @@ Both were built to compare the 2025 Dragon Bravo Fire on the North Rim of Grand 
 
 Choose one.
 
-**As a plugin** (everything). Build the zip with `python3 dev/build_plugin.py`, then in QGIS use *Plugins › Manage and Install Plugins › Install from ZIP* and pick `dist/qgis_burn_severity-<version>.zip`. The tools appear in the Processing Toolbox under **Fire Analysis**, in the groups Pipeline, Imagery and Severity; the summary tool is **Fire Analysis › Severity › Burn severity summary** (algorithm id `fireanalysis:burnseveritysummary`).
+**As a plugin** (everything). Build the zip with `python3 dev/build_plugin.py`, then in QGIS use *Plugins › Manage and Install Plugins › Install from ZIP* and pick `dist/wildfire_analysis_toolkit-<version>.zip`. The tools appear in the Processing Toolbox under **Wildfire Analysis Toolkit**, in the groups Pipeline, Imagery and Severity; the summary tool is **Wildfire Analysis Toolkit › Severity › Burn severity summary** (algorithm id `fireanalysis:burnseveritysummary`).
 
 **As a script** (the summary tool only). In the Processing Toolbox, click the Python icon and choose **Add Script to Toolbox…**, then pick `burn_severity_summary.py`. The tool appears under **Scripts › Fire Analysis › Burn severity summary** (algorithm id `script:burnseveritysummary`). QGIS copies the file into your profile's `processing/scripts` folder, so add it again after downloading a new version.
 
@@ -43,7 +43,7 @@ Try it on the bundled [test data](testdata/README.md):
 
 Leave everything else at the defaults and click **Run**. The Bright Angel row of the zonal histogram should read 3,997 / 78,398 / 57,213 / 16,001 / 9 pixels.
 
-**The pipeline**, with an Earthdata login in `~/.netrc`: open **Fire Analysis › Pipeline › Burn severity (whole pipeline)** and set
+**The pipeline**, with an Earthdata login in `~/.netrc`: open **Wildfire Analysis Toolkit › Pipeline › Burn severity (whole pipeline)** and set
 
 | Parameter | Value |
 |---|---|
@@ -67,7 +67,7 @@ Checked against 17 published MTBS fires: the imagery and calibration reproduce M
 
 ### One step: Burn severity (whole pipeline)
 
-**Burn severity (whole pipeline)** (`fireanalysis:burnseveritypipeline`, under **Fire Analysis › Pipeline**) runs everything below from a fire's burned-area polygons and dates, and writes the results to one folder.
+**Burn severity (whole pipeline)** (`fireanalysis:burnseveritypipeline`, under **Wildfire Analysis Toolkit › Pipeline**) runs everything below from a fire's burned-area polygons and dates, and writes the results to one folder.
 
 | Parameter | Description |
 |---|---|
@@ -139,7 +139,7 @@ Calibration: Landsat reflectance = DN × 0.0000275 − 0.2 (read from the metada
 
 ### Severity
 
-**Build dNBR** (`fireanalysis:builddnbr`, under **Fire Analysis › Severity**) turns the two NBRs into dNBR, RdNBR and RBR, and measures the dNBR offset: the median dNBR of unburned land, which is rarely exactly 0 because the two dates differ in phenology, moisture and sun angle.
+**Build dNBR** (`fireanalysis:builddnbr`, under **Wildfire Analysis Toolkit › Severity**) turns the two NBRs into dNBR, RdNBR and RBR, and measures the dNBR offset: the median dNBR of unburned land, which is rarely exactly 0 because the two dates differ in phenology, moisture and sun angle.
 
 | Parameter | Description |
 |---|---|
@@ -387,7 +387,7 @@ Plotting percent puts zones of different sizes on the same scale. Use the `ac_` 
 | `fireanalysis/` | The pipeline package (plugin only): Earthdata login, STAC search, HLS, Planetary Computer, MTBS service, local scenes, and the algorithms. |
 | `plugin/` | Plugin wrapper: provider, entry point, `metadata.txt`, icon. |
 | `docs/DESIGN.md` | The pipeline plan, decisions and verified service details. |
-| `dev/build_plugin.py` | Builds `dist/qgis_burn_severity-<version>.zip`. |
+| `dev/build_plugin.py` | Builds `dist/wildfire_analysis_toolkit-<version>.zip`. |
 | `dev/smoke_test.py` | Runs every mode on `testdata/` and checks the counts, inside QGIS (Python Console) or headless. |
 | `dev/pipeline_test.py` | Tests the offline pipeline algorithms (Build dNBR) on `testdata/`. |
 | `dev/perimeter_study.py` | Scores the perimeter draft against MTBS perimeters (offline, on the validation outputs). |

@@ -2,7 +2,7 @@
 
 ## 2.0.0 — unreleased
 
-The plugin becomes a fire analysis pipeline (plan in `docs/DESIGN.md`). The standalone script, Burn severity summary 1.1.0, is unchanged.
+The plugin becomes a fire analysis pipeline (plan in `docs/DESIGN.md`) and is renamed the **Wildfire Analysis Toolkit**: plugin name, Toolbox provider and zip folder (`wildfire_analysis_toolkit`). The provider id stays `fireanalysis`, so algorithm ids are unchanged. The standalone script, Burn severity summary 1.1.0, is unchanged.
 
 - **Find HLS scenes** (`fireanalysis:findhlsscenes`, plugin only). Searches NASA's HLS v2.0 archive (Landsat 8/9 L30 and Sentinel-2 S30) over an area of interest and date range, and returns one footprint per granule with its tile, date, scene cloud cover and the share of the AOI it covers. No login needed. Optionally measures each date's clear share inside the AOI from Fmask (needs the login; six dates at a time).
 - **Severity map (PDF)** (`fireanalysis:severitymap`, plugin only). A4 map of the MTBS classes with burned area, sub-areas, legend, scale bar, north arrow, area summary and a provenance note from the raster metadata; PDF and PNG.

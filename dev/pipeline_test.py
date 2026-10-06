@@ -99,7 +99,7 @@ def read(path):
     return ds, a
 
 
-print(f"Fire Analysis {VERSION} pipeline test on QGIS {Qgis.QGIS_VERSION}; outputs in {OUT}")
+print(f"Wildfire Analysis Toolkit {VERSION} pipeline test on QGIS {Qgis.QGIS_VERSION}; outputs in {OUT}")
 
 # Synthetic post-fire NBR on the dNBR grid
 dnbr_ds, dnbr = read(T + "dnbr.tif")

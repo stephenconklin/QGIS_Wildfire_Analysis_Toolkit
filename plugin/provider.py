@@ -1,4 +1,4 @@
-"""Fire Analysis Processing provider.
+"""Wildfire Analysis Toolkit Processing provider (id fireanalysis, kept from 2.0 development so algorithm ids stay fireanalysis:...).
 
 Burn severity summary is the same file that is installed as a standalone
 script (burn_severity_summary.py, copied in by dev/build_plugin.py); here its id
@@ -24,7 +24,7 @@ from .fireanalysis.algorithms.suggest_image_pairs import SuggestImagePairs
 
 
 class _PluginBurnSeveritySummary(BurnSeveritySummary):
-    # The script's group is "Fire Analysis", which is the provider's name here.
+    # The standalone script uses group "Fire Analysis"; inside the provider it goes in Severity.
     def group(self):
         return 'Severity'
 
@@ -37,10 +37,10 @@ class FireAnalysisProvider(QgsProcessingProvider):
         return 'fireanalysis'
 
     def name(self):
-        return 'Fire Analysis'
+        return 'Wildfire Analysis Toolkit'
 
     def longName(self):
-        return f'Fire Analysis {VERSION}'
+        return f'Wildfire Analysis Toolkit {VERSION}'
 
     def versionInfo(self):
         return VERSION

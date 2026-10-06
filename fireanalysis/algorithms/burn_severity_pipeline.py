@@ -378,7 +378,7 @@ table{{border-collapse:collapse;margin:.5rem 0 1.5rem}}td,th{{border:1px solid #
 th{{background:#f3f3f3}}td:first-child,th:first-child{{text-align:left}}h1{{font-size:1.6rem}}h2{{font-size:1.15rem;margin-top:2rem}}
 code{{font-size:.85em}}.note{{color:#555}}</style></head><body>
 <h1>{e(r["fire"])}: burn severity</h1>
-<p>Fire {e(r["fire_start"])} to {e(r["fire_end"])}, {e(_lower_first(r["assessment"]))}. Fire Analysis {e(r["fireanalysis_version"])}, {e(r["created"])}.</p>
+<p>Fire {e(r["fire_start"])} to {e(r["fire_end"])}, {e(_lower_first(r["assessment"]))}. Wildfire Analysis Toolkit {e(r["fireanalysis_version"])}, {e(r["created"])}.</p>
 <h2>Severity by class</h2>
 {_chart(fields, rows)}
 <table><tr>{"".join(f"<th>{e(n)}</th>" for n in fields)}</tr>{rows_html}</table>

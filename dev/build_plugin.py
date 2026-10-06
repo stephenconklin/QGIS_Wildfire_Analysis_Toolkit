@@ -2,7 +2,7 @@
 Build an installable QGIS plugin zip from plugin/, fireanalysis/ and
 burn_severity_summary.py.
 
-    python3 dev/build_plugin.py        ->  dist/qgis_burn_severity-<version>.zip
+    python3 dev/build_plugin.py        ->  dist/wildfire_analysis_toolkit-<version>.zip
 
 Install it in QGIS with Plugins > Manage and Install Plugins > Install from ZIP.
 Plain Python; QGIS is not needed to build. The plugin version is VERSION in
@@ -13,7 +13,7 @@ import re
 import zipfile
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-PKG = "qgis_burn_severity"  # plugin folder name inside the zip
+PKG = "wildfire_analysis_toolkit"  # plugin folder name inside the zip
 
 init = (REPO / "fireanalysis" / "__init__.py").read_text(encoding="utf-8")
 version = re.search(r'^VERSION = "([^"]+)"', init, re.M).group(1)

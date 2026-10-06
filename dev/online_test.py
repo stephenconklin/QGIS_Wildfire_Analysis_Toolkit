@@ -96,7 +96,7 @@ def check(name, ok, detail=""):
     print(("PASS  " if ok else "FAIL  ") + name + ("" if ok or not detail else "\n      " + detail))
 
 
-print(f"Fire Analysis {VERSION} online test on QGIS {Qgis.QGIS_VERSION}; outputs in {OUT}")
+print(f"Wildfire Analysis Toolkit {VERSION} online test on QGIS {Qgis.QGIS_VERSION}; outputs in {OUT}")
 nbr = {}
 found = {}
 granule_ids = {}

@@ -255,7 +255,7 @@ class SeverityMap(QgsProcessingAlgorithm):
                 lines.append('Thresholds estimated; check them against the imagery before use.')
         if parameters.get(self.NOTE):
             lines.append(self.parameterAsString(parameters, self.NOTE, context))
-        lines.append(f'Made with Fire Analysis {VERSION} for QGIS, {datetime.date.today().isoformat()}. '
+        lines.append(f'Made with the Wildfire Analysis Toolkit {VERSION} for QGIS, {datetime.date.today().isoformat()}. '
                      'Data: NASA HLS / USGS Landsat / ESA Sentinel-2.')
         _label(layout, '<br>'.join(lines), 200, y, 92, 60, 8, html=True)
 

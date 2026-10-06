@@ -1,11 +1,11 @@
 ; dev/build_plugin.py fills in version from VERSION in fireanalysis/__init__.py.
 [general]
-name=Burn Severity Summary
+name=Wildfire Analysis Toolkit
 qgisMinimumVersion=3.40
 qgisMaximumVersion=4.99
 supportsQt6=True
 description=Wildfire burn severity from satellite imagery to MTBS-style classes, area summaries, maps and reports: NASA HLS, Landsat and Sentinel-2, calibrated, with dNBR, RdNBR and RBR.
-about=Fire Analysis Processing tools, modeled on the MTBS QGIS Fire Mapping Tool. Pipeline: Burn severity (whole pipeline) goes from a fire's perimeter and dates to an image pair, NBR, dNBR with the unburned offset, MTBS classes, area summaries and an HTML report; Severity map (PDF) makes the map. Imagery: NASA HLS v2.0 (needs a free Earthdata login in ~/.netrc), Landsat 4-9 Collection 2 and Sentinel-2 L2A from Microsoft Planetary Computer (no account), or downloaded scenes, calibrated from their metadata and cloud-masked, reading only the area of interest. Severity: Build dNBR (dNBR, RdNBR, RBR, offset), Draft burned-area perimeter, Classify severity (MTBS classes, thresholds given or estimated from nearby MTBS fires), and Burn severity summary (percent, hectares and acres per class for a fire and its sub-areas). Validated against 23 published MTBS fires. Uses only PyQGIS, GDAL and numpy.
+about=Wildfire Analysis Toolkit: QGIS Processing tools for wildfire burn severity, modeled on the MTBS QGIS Fire Mapping Tool. Pipeline: Burn severity (whole pipeline) goes from a fire's perimeter and dates to an image pair, NBR, dNBR with the unburned offset, MTBS classes, area summaries and an HTML report; Severity map (PDF) makes the map. Imagery: NASA HLS v2.0 (needs a free Earthdata login in ~/.netrc), Landsat 4-9 Collection 2 and Sentinel-2 L2A from Microsoft Planetary Computer (no account), or downloaded scenes, calibrated from their metadata and cloud-masked, reading only the area of interest. Severity: Build dNBR (dNBR, RdNBR, RBR, offset), Draft burned-area perimeter, Classify severity (MTBS classes, thresholds given or estimated from nearby MTBS fires), and Burn severity summary (percent, hectares and acres per class for a fire and its sub-areas). Validated against 23 published MTBS fires. Uses only PyQGIS, GDAL and numpy.
 version=0.0.0
 author=Stephen Conklin
 email=stephenconklin@gmail.com
