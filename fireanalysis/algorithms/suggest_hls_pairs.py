@@ -13,6 +13,7 @@ from ..compat import date_type, field, integer_type, polygon_source, warn
 from .find_hls_scenes import aoi_geometry, search_granules
 
 INITIAL, EXTENDED = 0, 1
+WORKERS = 6  # Fmask windows read at once
 ASSESSMENTS = ['Initial (soon after the fire)', 'Extended (next growing season)']
 
 
@@ -113,26 +114,42 @@ class SuggestHlsPairs(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, 'Image pairs'))
 
     def _dates(self, rows, aoi, context, feedback, label):
-        """{(date, sensor): (clear %, [granules])} for every date in rows."""
-        from .fetch_hls_nbr import clear_share
+        """{(date, sensor): (clear %, [granules])} for every date in rows. Fmask is read
+        for several dates at once; messages are written here, on the algorithm's thread."""
+        from concurrent.futures import ThreadPoolExecutor
+        from .fetch_hls_nbr import aoi_grid, clear_share_on
         groups = sorted({(r[0], r[2]) for r in rows})
-        out = {}
         feedback.pushInfo(f'{label}: {len(groups)} dates to check.')
-        for date, sensor in groups:
-            if feedback.isCanceled():
-                return out
-            granules = [r[1] for r in rows if (r[0], r[2]) == (date, sensor)]
-            try:
-                clear, data = clear_share(granules, aoi, context, feedback)
-            except earthdata.EarthdataError as e:
-                raise QgsProcessingException(str(e)) from None
-            except (QgsProcessingException, RuntimeError) as e:
-                warn(feedback, f'  {date} {sensor}: could not read Fmask ({e}); skipped.')
-                continue
-            if clear is None:
-                return out
-            feedback.pushInfo(f'  {date} {sensor}: {clear:.0f} % clear')
-            out[(datetime.date.fromisoformat(date), sensor)] = (clear, granules)
+        if not groups:
+            return {}
+        try:
+            earthdata.configure_gdal()
+        except earthdata.EarthdataError as e:
+            raise QgsProcessingException(str(e)) from None
+        grid = aoi_grid(aoi, context.transformContext())
+        jobs = {g: [r[1] for r in rows if (r[0], r[2]) == g] for g in groups}
+
+        def one(group):
+            error = None
+            for _attempt in range(2):  # a read now and then fails under load; try once more
+                if feedback.isCanceled():
+                    return group, None, 'cancelled'
+                try:
+                    return group, clear_share_on(jobs[group], grid, feedback), None
+                except Exception as e:  # reported below, on this thread
+                    error = str(e)
+            return group, None, error
+
+        out = {}
+        with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+            for (date, sensor), result, error in pool.map(one, groups):
+                if error == 'cancelled' or feedback.isCanceled():
+                    continue
+                if error or result is None or result[0] is None:
+                    warn(feedback, f'  {date} {sensor}: could not read Fmask ({error}); skipped.')
+                    continue
+                feedback.pushInfo(f'  {date} {sensor}: {result[0]:.0f} % clear')
+                out[(datetime.date.fromisoformat(date), sensor)] = (result[0], jobs[(date, sensor)])
         return out
 
     def processAlgorithm(self, parameters, context, feedback):
@@ -193,8 +210,8 @@ class SuggestHlsPairs(QgsProcessingAlgorithm):
             for (qd, qs), (qc, qg) in pre.items():
                 gap = doy_gap(pd, qd)
                 if gap <= season and qd < start:
-                    pairs.append((gap, -min(pc, qc), pd.year - qd.year, qd, qs, qc, qg, pd, ps, pc, pg))
-        # 5-day season bins, then fewer years apart, then clearer, then the earliest post-fire date
+                    pairs.append((gap, -round(min(pc, qc)), pd.year - qd.year, qd, qs, qc, qg, pd, ps, pc, pg))
+        # 5-day season bins, then fewer years apart, then clearer (whole percent), then the earliest post-fire date
         pairs.sort(key=lambda p: (p[0] // 5, p[2], p[1], p[7], p[3]))
 
         fields = QgsFields()

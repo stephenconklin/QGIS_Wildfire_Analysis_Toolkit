@@ -18,25 +18,41 @@ def tile_epsg(tile):
 CLEAR_FLAGS = ('cloud', 'adjacent', 'shadow', 'snow')  # what makes an AOI pixel unusable for a date
 
 
-def clear_share(granules, aoi, context, feedback, netrc_path=None):
-    """Percent of the AOI (EPSG:4326 geometry) that is clear on one date: the
-    granules' Fmask windows mosaicked on a 30 m grid, clear = data and none of
-    CLEAR_FLAGS. Returns (clear %, data %)."""
-    import numpy as np
+def aoi_grid(aoi, transform_context):
+    """The 30 m grid over an AOI (EPSG:4326) and the AOI mask on it, for clear_share_on.
+    Computed once and shared by every date (and thread)."""
     from osgeo import gdal
-    earthdata.configure_gdal(netrc_path)
-    crs, bounds, ncols, nrows = raster.analysis_grid(aoi, None, 0, hls.PIXEL, context.transformContext())
+    from qgis.core import QgsCoordinateReferenceSystem
+    crs, bounds, ncols, nrows = raster.analysis_grid(aoi, None, 0, hls.PIXEL, transform_context)
+    wkt = raster.crs_wkt(crs)
+    like = gdal.GetDriverByName('MEM').Create('', ncols, nrows, 1, gdal.GDT_Byte)
+    like.SetGeoTransform((bounds[0], hls.PIXEL, 0, bounds[3], 0, -hls.PIXEL))
+    like.SetProjection(wkt)
+    inside = raster.rasterize(aoi, QgsCoordinateReferenceSystem('EPSG:4326'), like, transform_context)
+    return {'bounds': bounds, 'wkt': wkt, 'inside': inside}
+
+
+def clear_share_on(granules, grid, feedback):
+    """Percent of the AOI that is clear on one date (granules' Fmask mosaicked on the
+    grid from aoi_grid; clear = data and none of CLEAR_FLAGS). Returns (clear %, data %).
+    Safe to call from several threads at once."""
+    from osgeo import gdal
     urls = ['/vsicurl/' + hls.band_url(g, 'Fmask') for g in granules]
-    ds = FetchHlsNbr._warp(urls, bounds, raster.crs_wkt(crs), 'near', hls.FMASK_FILL, gdal.GDT_Byte, feedback)
+    ds = FetchHlsNbr._warp(urls, grid['bounds'], grid['wkt'], 'near', hls.FMASK_FILL, gdal.GDT_Byte, feedback)
     if ds is None:
         return None, None
     fmask = ds.GetRasterBand(1).ReadAsArray()
-    from qgis.core import QgsCoordinateReferenceSystem
-    inside = raster.rasterize(aoi, QgsCoordinateReferenceSystem('EPSG:4326'), ds, context.transformContext())
+    inside = grid['inside']
     n = max(int(inside.sum()), 1)
     data = inside & (fmask != hls.FMASK_FILL)
     clear = data & ~hls.fmask_mask(fmask, set(CLEAR_FLAGS))
     return 100.0 * int(clear.sum()) / n, 100.0 * int(data.sum()) / n
+
+
+def clear_share(granules, aoi, context, feedback, netrc_path=None):
+    """clear_share_on for a single date."""
+    earthdata.configure_gdal(netrc_path)
+    return clear_share_on(granules, aoi_grid(aoi, context.transformContext()), feedback)
 
 
 class FetchHlsNbr(QgsProcessingAlgorithm):
