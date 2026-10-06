@@ -1,21 +1,13 @@
 """Fetch HLS NBR: read the AOI window of HLS granules from NASA Earthdata,
 mosaic them on a 30 m grid, mask with Fmask and compute NBR."""
-import math
-
-from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsGeometry,
-                       QgsProcessingAlgorithm, QgsProcessingException, QgsProcessingParameterCrs,
+from qgis.core import (QgsProcessingAlgorithm, QgsProcessingException, QgsProcessingParameterCrs,
                        QgsProcessingParameterEnum, QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterFile, QgsProcessingParameterNumber,
-                       QgsProcessingParameterRasterDestination)
+                       QgsProcessingParameterRasterDestination, QgsProcessingParameterString)
 
 from .. import VERSION, earthdata, hls, raster
 from ..compat import advanced, double_type, polygon_source, warn
 from .find_hls_scenes import aoi_geometry
-
-
-def utm_crs(lon, lat):
-    zone = min(int((lon + 180) // 6) + 1, 60)
-    return QgsCoordinateReferenceSystem(f'EPSG:{(32600 if lat >= 0 else 32700) + zone}')
 
 
 def tile_epsg(tile):
@@ -23,9 +15,34 @@ def tile_epsg(tile):
     return (32600 if tile[2] >= 'N' else 32700) + int(tile[:2])
 
 
+CLEAR_FLAGS = ('cloud', 'adjacent', 'shadow', 'snow')  # what makes an AOI pixel unusable for a date
+
+
+def clear_share(granules, aoi, context, feedback, netrc_path=None):
+    """Percent of the AOI (EPSG:4326 geometry) that is clear on one date: the
+    granules' Fmask windows mosaicked on a 30 m grid, clear = data and none of
+    CLEAR_FLAGS. Returns (clear %, data %)."""
+    import numpy as np
+    from osgeo import gdal
+    earthdata.configure_gdal(netrc_path)
+    crs, bounds, ncols, nrows = raster.analysis_grid(aoi, None, 0, hls.PIXEL, context.transformContext())
+    urls = ['/vsicurl/' + hls.band_url(g, 'Fmask') for g in granules]
+    ds = FetchHlsNbr._warp(urls, bounds, raster.crs_wkt(crs), 'near', hls.FMASK_FILL, gdal.GDT_Byte, feedback)
+    if ds is None:
+        return None, None
+    fmask = ds.GetRasterBand(1).ReadAsArray()
+    from qgis.core import QgsCoordinateReferenceSystem
+    inside = raster.rasterize(aoi, QgsCoordinateReferenceSystem('EPSG:4326'), ds, context.transformContext())
+    n = max(int(inside.sum()), 1)
+    data = inside & (fmask != hls.FMASK_FILL)
+    clear = data & ~hls.fmask_mask(fmask, set(CLEAR_FLAGS))
+    return 100.0 * int(clear.sum()) / n, 100.0 * int(data.sum()) / n
+
+
 class FetchHlsNbr(QgsProcessingAlgorithm):
     AOI = 'AOI'
     SCENES = 'SCENES'
+    GRANULES = 'GRANULES'
     BUFFER = 'BUFFER'
     CRS = 'CRS'
     MASK = 'MASK'
@@ -72,7 +89,10 @@ class FetchHlsNbr(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterFeatureSource(
             self.AOI, 'Area of interest', [polygon_source()]))
         self.addParameter(QgsProcessingParameterFeatureSource(
-            self.SCENES, 'HLS scenes (from Find HLS scenes; one date)', [polygon_source()]))
+            self.SCENES, 'HLS scenes (from Find HLS scenes; one date)', [polygon_source()], optional=True))
+        self.addParameter(QgsProcessingParameterString(
+            self.GRANULES, 'Or: granule ids, separated by spaces (e.g. from Suggest HLS image pairs)',
+            optional=True))
         self.addParameter(QgsProcessingParameterNumber(
             self.BUFFER, 'Buffer around the AOI (m)', type=double_type(),
             minValue=0, defaultValue=3000))
@@ -95,13 +115,19 @@ class FetchHlsNbr(QgsProcessingAlgorithm):
     # ---- helpers --------------------------------------------------------------
 
     def _granules(self, parameters, context):
-        source = self.parameterAsSource(parameters, self.SCENES, context)
-        if source is None:
-            raise QgsProcessingException('The scenes layer could not be loaded.')
-        if source.fields().indexOf('granule') < 0:
-            raise QgsProcessingException(
-                'The scenes layer has no "granule" field; use the output of Find HLS scenes.')
-        granules = sorted({str(f['granule']) for f in source.getFeatures() if f['granule']})
+        text = (self.parameterAsString(parameters, self.GRANULES, context) or '').replace(',', ' ')
+        if text.strip():
+            granules = sorted(set(text.split()))
+        else:
+            if not parameters.get(self.SCENES):
+                raise QgsProcessingException('Give the HLS scenes layer or the granule ids.')
+            source = self.parameterAsSource(parameters, self.SCENES, context)
+            if source is None:
+                raise QgsProcessingException('The scenes layer could not be loaded.')
+            if source.fields().indexOf('granule') < 0:
+                raise QgsProcessingException(
+                    'The scenes layer has no "granule" field; use the output of Find HLS scenes.')
+            granules = sorted({str(f['granule']) for f in source.getFeatures() if f['granule']})
         if not granules:
             raise QgsProcessingException('No scenes given; select at least one.')
         parsed = []
@@ -143,18 +169,12 @@ class FetchHlsNbr(QgsProcessingAlgorithm):
 
     def processAlgorithm(self, parameters, context, feedback):
         import numpy as np
-        from osgeo import gdal, osr
+        from osgeo import gdal
         gdal.UseExceptions()
 
         scenes, sensor, date = self._granules(parameters, context)
         bands = hls.PRODUCTS[sensor]['bands']
         aoi = aoi_geometry(self.parameterAsSource(parameters, self.AOI, context), context)
-        crs = self.parameterAsCrs(parameters, self.CRS, context)
-        if not crs.isValid():
-            c = aoi.centroid().asPoint()
-            crs = utm_crs(c.x(), c.y())
-        if crs.isGeographic():
-            raise QgsProcessingException('The target CRS must be projected, in meters.')
         buffer_m = self.parameterAsDouble(parameters, self.BUFFER, context)
         mask_keys = {hls.FMASK_CLASSES[i][0] for i in self.parameterAsEnums(parameters, self.MASK, context)}
         netrc_path = self.parameterAsFile(parameters, self.NETRC, context) or None
@@ -166,25 +186,16 @@ class FetchHlsNbr(QgsProcessingAlgorithm):
             raise QgsProcessingException(str(e)) from None
 
         # Grid: AOI + buffer in the target CRS, snapped outward to 30 m
-        area = QgsGeometry(aoi)
-        area.transform(QgsCoordinateTransform(QgsCoordinateReferenceSystem('EPSG:4326'), crs,
-                                              context.transformContext()))
-        box = area.buffer(buffer_m, 16).boundingBox() if buffer_m > 0 else area.boundingBox()
+        crs, bounds, ncols, nrows = raster.analysis_grid(
+            aoi, self.parameterAsCrs(parameters, self.CRS, context), buffer_m, hls.PIXEL,
+            context.transformContext())
         px = hls.PIXEL
-        bounds = (math.floor(box.xMinimum() / px) * px, math.floor(box.yMinimum() / px) * px,
-                  math.ceil(box.xMaximum() / px) * px, math.ceil(box.yMaximum() / px) * px)
-        ncols, nrows = int((bounds[2] - bounds[0]) / px), int((bounds[3] - bounds[1]) / px)
-        srs = osr.SpatialReference()
-        srs.SetFromUserInput(crs.toWkt())
-        crs_wkt = srs.ExportToWkt()
+        crs_wkt = raster.crs_wkt(crs)
         same_zone = all(crs.authid() == f'EPSG:{tile_epsg(s[2])}' for s in scenes)
         feedback.pushInfo(
             f'{sensor} {date.isoformat()}, tiles {", ".join(s[2] for s in scenes)}; '
             f'grid {ncols} x {nrows} px at {px:.0f} m in {crs.authid() or crs.description()}'
             + ('' if same_zone else '; reprojecting (bilinear for reflectance)'))
-        if ncols * nrows > 40_000_000:
-            raise QgsProcessingException(
-                f'The area is {ncols} x {nrows} pixels; that is too large. Use a smaller AOI or buffer.')
 
         wanted = ['nir', 'swir2', 'fmask']
         want_refl = parameters.get(self.REFLECTANCE) not in (None, '')

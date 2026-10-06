@@ -1,7 +1,7 @@
 """Find HLS scenes: STAC search of NASA HLS v2.0 granules over an AOI."""
 import json
 
-from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsDistanceArea,
+from qgis.core import (QgsCoordinateReferenceSystem, QgsProcessingParameterBoolean, QgsCoordinateTransform, QgsDistanceArea,
                        QgsFeature, QgsFeatureSink, QgsFields, QgsGeometry, QgsJsonUtils,
                        QgsProcessingAlgorithm, QgsProcessingException,
                        QgsProcessingParameterDateTime, QgsProcessingParameterEnum,
@@ -9,7 +9,7 @@ from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform, Qgs
                        QgsProcessingParameterNumber)
 from qgis.PyQt.QtCore import QDate
 
-from .. import VERSION, hls, stac
+from .. import VERSION, earthdata, hls, stac
 from ..compat import date_type, field, integer_type, polygon_source, polygon_wkb, warn
 
 WGS84 = 'EPSG:4326'
@@ -32,12 +32,49 @@ def aoi_geometry(source, context):
     return QgsGeometry.unaryUnion(parts)
 
 
+def search_granules(aoi, start, end, sensors, max_cloud, context, feedback):
+    """HLS granules over aoi (EPSG:4326) between two datetime.date values, sorted by
+    date. Each row: (date iso, granule, sensor, tile, doy, cloud %, aoi %, datetime, geometry)."""
+    area = QgsDistanceArea()
+    area.setSourceCrs(QgsCoordinateReferenceSystem(WGS84), context.transformContext())
+    area.setEllipsoid('EPSG:7030')
+    aoi_area = area.measureArea(aoi)
+    box = aoi.boundingBox()
+    when = f'{start.isoformat()}T00:00:00Z/{end.isoformat()}T23:59:59Z'
+    rows = []
+    try:
+        for item in stac.search(hls.STAC_SEARCH, [hls.PRODUCTS[s]['collection'] for s in sensors],
+                                [box.xMinimum(), box.yMinimum(), box.xMaximum(), box.yMaximum()],
+                                when, feedback=feedback):
+            if feedback.isCanceled():
+                return rows
+            try:
+                sensor, tile, date = hls.parse_granule(item['id'])
+            except ValueError:
+                continue
+            cloud = item['properties'].get('eo:cloud_cover')
+            if cloud is not None and cloud > max_cloud:
+                continue
+            geom = QgsJsonUtils.geometryFromGeoJson(json.dumps(item['geometry']))
+            if geom.isEmpty() or not geom.intersects(aoi):
+                continue  # the bbox search also returns tiles beside a non-rectangular AOI
+            inside = area.measureArea(geom.intersection(aoi))
+            rows.append((date.isoformat(), item['id'], sensor, tile, date.timetuple().tm_yday,
+                         cloud, 100.0 * inside / aoi_area if aoi_area else 0.0,
+                         item['properties'].get('datetime', ''), geom))
+    except stac.StacError as e:
+        raise QgsProcessingException(str(e)) from None
+    rows.sort()
+    return rows
+
+
 class FindHlsScenes(QgsProcessingAlgorithm):
     AOI = 'AOI'
     START = 'START'
     END = 'END'
     SENSORS = 'SENSORS'
     MAX_CLOUD = 'MAX_CLOUD'
+    AOI_CLEAR = 'AOI_CLEAR'
     OUTPUT = 'OUTPUT'
 
     def name(self):
@@ -61,6 +98,11 @@ class FindHlsScenes(QgsProcessingAlgorithm):
             'MGRS tile, date, day of year, cloud (scene cloud cover, %), aoi_pct (share '
             'of the AOI inside the footprint). A large AOI covers several tiles per '
             'date; select all of one date\'s tiles for <i>Fetch HLS NBR</i>.</p>'
+            '<p><b>Clear share inside the AOI</b> (optional, needs the Earthdata login): for '
+            'each date and sensor, the tiles\' Fmask is read over the AOI only, and '
+            '<i>aoi_clear</i> is the share of the AOI with data and no cloud, adjacent cloud, '
+            'shadow or snow; <i>aoi_data</i> the share with data. This is what matters for '
+            'choosing an image pair, unlike the tile-wide cloud cover.</p>'
             '<p>HLS starts in April 2013 (L30) and late 2015 (S30).</p>'
             f'<p><i>Version {VERSION}</i></p>')
 
@@ -81,6 +123,9 @@ class FindHlsScenes(QgsProcessingAlgorithm):
             self.MAX_CLOUD, 'Maximum scene cloud cover (%)',
             type=integer_type(),
             minValue=0, maxValue=100, defaultValue=100))
+        self.addParameter(QgsProcessingParameterBoolean(
+            self.AOI_CLEAR, 'Measure the clear share inside the AOI (reads Fmask; needs the Earthdata login)',
+            defaultValue=False))
         self.addParameter(QgsProcessingParameterFeatureSink(
             self.OUTPUT, 'HLS scenes', polygon_source()))
 
@@ -103,49 +148,42 @@ class FindHlsScenes(QgsProcessingAlgorithm):
         for name, kind, length in (('granule', 'string', 40), ('sensor', 'string', 3),
                                    ('tile', 'string', 5), ('date', 'string', 10),
                                    ('doy', 'int', 0), ('cloud', 'int', 0),
-                                   ('aoi_pct', 'double', 0), ('datetime', 'string', 30)):
+                                   ('aoi_pct', 'double', 0), ('datetime', 'string', 30),
+                                   ('aoi_clear', 'double', 0), ('aoi_data', 'double', 0)):
             fields.append(field(name, kind, length))
         sink, dest_id = self.parameterAsSink(parameters, self.OUTPUT, context, fields,
                                              polygon_wkb(), QgsCoordinateReferenceSystem(WGS84))
 
-        area = QgsDistanceArea()
-        area.setSourceCrs(QgsCoordinateReferenceSystem(WGS84), context.transformContext())
-        area.setEllipsoid('EPSG:7030')
-        aoi_area = area.measureArea(aoi)
-
-        box = aoi.boundingBox()
-        when = f'{start.toString("yyyy-MM-dd")}T00:00:00Z/{end.toString("yyyy-MM-dd")}T23:59:59Z'
-        feedback.pushInfo(f'Searching {", ".join(sensors)} from {when.replace("/", " to ")}...')
-        rows = []
-        try:
-            for item in stac.search(hls.STAC_SEARCH, [hls.PRODUCTS[s]['collection'] for s in sensors],
-                                    [box.xMinimum(), box.yMinimum(), box.xMaximum(), box.yMaximum()],
-                                    when, feedback=feedback):
+        feedback.pushInfo(f'Searching {", ".join(sensors)} from {start.toString("yyyy-MM-dd")} '
+                          f'to {end.toString("yyyy-MM-dd")}...')
+        rows = search_granules(aoi, start.toPyDate(), end.toPyDate(), sensors, max_cloud, context, feedback)
+        if feedback.isCanceled():
+            return {}
+        clear = {}
+        if self.parameterAsBoolean(parameters, self.AOI_CLEAR, context) and rows:
+            from .fetch_hls_nbr import clear_share
+            groups = sorted({(r[0], r[2]) for r in rows})
+            feedback.pushInfo(f'Measuring the clear share inside the AOI for {len(groups)} dates...')
+            for i, (date, sensor) in enumerate(groups):
                 if feedback.isCanceled():
                     return {}
                 try:
-                    sensor, tile, date = hls.parse_granule(item['id'])
-                except ValueError:
-                    continue
-                cloud = item['properties'].get('eo:cloud_cover')
-                if cloud is not None and cloud > max_cloud:
-                    continue
-                geom = QgsJsonUtils.geometryFromGeoJson(json.dumps(item['geometry']))
-                if geom.isEmpty() or not geom.intersects(aoi):
-                    continue  # the bbox search also returns tiles beside a non-rectangular AOI
-                inside = area.measureArea(geom.intersection(aoi))
-                rows.append((date.isoformat(), item['id'], sensor, tile, date.timetuple().tm_yday,
-                             cloud, 100.0 * inside / aoi_area if aoi_area else 0.0,
-                             item['properties'].get('datetime', ''), geom))
-        except stac.StacError as e:
-            raise QgsProcessingException(str(e)) from None
-
-        rows.sort()
+                    c, d = clear_share([r[1] for r in rows if (r[0], r[2]) == (date, sensor)], aoi, context, feedback)
+                except earthdata.EarthdataError as e:
+                    raise QgsProcessingException(str(e)) from None
+                except (QgsProcessingException, RuntimeError) as e:
+                    raise QgsProcessingException(f'Could not read Fmask for {sensor} {date}: {e}') from None
+                clear[(date, sensor)] = (c, d)
+                if c is not None:
+                    feedback.pushInfo(f'  {date} {sensor}: {c:.0f} % clear, {d:.0f} % with data')
+                feedback.setProgress(100 * (i + 1) / len(groups))
         for date, granule, sensor, tile, doy, cloud, pct, dt, geom in rows:
             feat = QgsFeature(fields)
             feat.setGeometry(geom)
+            c, d = clear.get((date, sensor), (None, None))
             feat.setAttributes([granule, sensor, tile, date, doy,
-                                None if cloud is None else int(round(cloud)), round(pct, 2), dt])
+                                None if cloud is None else int(round(cloud)), round(pct, 2), dt,
+                                None if c is None else round(c, 1), None if d is None else round(d, 1)])
             sink.addFeature(feat, QgsFeatureSink.FastInsert)
         dates = sorted({r[0] for r in rows})
         feedback.pushInfo(f'{len(rows)} granules on {len(dates)} dates.')

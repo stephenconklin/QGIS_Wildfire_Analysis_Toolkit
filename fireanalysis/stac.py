@@ -28,12 +28,12 @@ def _request(url, body=None, feedback=None):
     if feedback is not None and feedback.isCanceled():
         return None
     if err != QgsBlockingNetworkRequest.NoError:
-        raise StacError(f'STAC request to {url} failed: {blocking.errorMessage()}')
+        raise StacError(f'Request to {url.split("?")[0]} failed: {blocking.errorMessage()}')
     content = bytes(blocking.reply().content())
     try:
         return json.loads(content)
     except ValueError:
-        raise StacError(f'STAC request to {url} did not return JSON: {content[:200]!r}') from None
+        raise StacError(f'Request to {url.split("?")[0]} did not return JSON: {content[:200]!r}') from None
 
 
 def search(endpoint, collections, bbox, datetime, limit=100, feedback=None):

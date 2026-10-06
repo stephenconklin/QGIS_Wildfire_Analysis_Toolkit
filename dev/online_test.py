@@ -16,6 +16,8 @@ Uses the test-data burned area (Dragon Bravo, clipped) as the AOI:
   3. A missing netrc file stops the fetch with a clear message.
   4. Build dNBR with the ring offset, then Burn severity summary on the result:
      the whole pipeline from search to summary table.
+  5. If the Lab 6 raw data zip is present: Prepare local scene NBR on the same
+     two acquisitions must match the HLS NBR on the same grid (r > 0.99).
 Prints PASS or FAIL per check, the offset and the summary table.
 """
 import os
@@ -43,6 +45,7 @@ from fireanalysis import VERSION  # noqa: E402
 from fireanalysis.algorithms.build_dnbr import BuildDnbr  # noqa: E402
 from fireanalysis.algorithms.fetch_hls_nbr import FetchHlsNbr  # noqa: E402
 from fireanalysis.algorithms.find_hls_scenes import FindHlsScenes  # noqa: E402
+from fireanalysis.algorithms.prepare_local_nbr import PrepareLocalNbr  # noqa: E402
 
 AOI = os.path.join(REPO, "testdata", "testdata.gpkg") + "|layername=burn_area"
 OUT = tempfile.mkdtemp(prefix="fireanalysis_online_")
@@ -181,6 +184,18 @@ if len(nbr) == 2:
                                                       os.path.join(REPO, "burn_severity_summary.py"))
         bss = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(bss)
+        # Classify with thresholds from nearby MTBS fires (online) and from this fire's data
+        from fireanalysis.algorithms.classify_severity import ClassifySeverity
+        for method, label in ((0, "nearby MTBS fires"), (1, "this fire's data")):
+            cres, _, clog = _run(ClassifySeverity(), {"DNBR": res["DNBR"], "PRE_NBR": nbr["pre"], "PERIMETER": AOI,
+                                                      "ESTIMATE": method,
+                                                      "OUTPUT": os.path.join(OUT, f"dnbr6_{method}.tif")})
+            ok = cres is not None and 0 < cres["LOW_T"] < cres["MODERATE_T"] <= cres["HIGH_T"]
+            check(f"classify with thresholds from {label}", ok and (method == 1 or any("nearby MTBS" in m for m in clog)),
+                  " | ".join(clog))
+            for m in clog:
+                if "threshold:" in m or "MTBS wildfires" in m:
+                    print("      " + m)
         res2, context2, log2 = _run(bss.BurnSeveritySummary(), {
             "DNBR": res["DNBR"], "BURN_AREA": AOI,
             "WATERSHED": os.path.join(REPO, "testdata", "testdata.gpkg") + "|layername=watershed",
@@ -192,6 +207,33 @@ if len(nbr) == 2:
             for f in table.getFeatures():
                 print(f"      {f['sev_class']:15s}  {f['pct_db']:14.2f}   {f['pct_ba']:14.2f}   "
                       f"{f['ac_db']:15,.0f}   {f['ac_ba']:15,.0f}")
+
+# Local scenes from the Lab 6 zip against HLS (same acquisitions, same grid)
+LAB_ZIP = ("/Users/stephenconklin/Library/CloudStorage/OneDrive-FortLewisCollege/GEOG-400-Raster-GIS/"
+           "Lab-6/Lab6-data-2026.zip")
+if len(nbr) == 2 and os.path.exists(LAB_ZIP):
+    import zipfile
+    cache = os.path.join(tempfile.gettempdir(), "fireanalysis_lab6raw")
+    with zipfile.ZipFile(LAB_ZIP) as z:
+        for name in z.namelist():
+            if (name.startswith("DragonBravo/Sentinel_20240913/") and ("_B8A_" in name or "_B12_" in name)) or \
+                    (name.startswith("DragonBravo/Landsat9_20250915/") and
+                     (name.endswith(("_SR_B5.TIF", "_SR_B7.TIF")) or name.endswith(".json"))):
+                if not os.path.exists(os.path.join(cache, name)):
+                    z.extract(name, cache)
+    for label, folder in (("pre", "Sentinel_20240913"), ("post", "Landsat9_20250915")):
+        res, _, log = _run(PrepareLocalNbr(), {"SCENE": os.path.join(cache, "DragonBravo", folder), "AOI": AOI,
+                                               "NBR": os.path.join(OUT, f"local_{label}.tif")})
+        if res is None:
+            check(f"local {label} NBR from the Lab 6 files", False, " | ".join(log))
+            continue
+        x, y = gdal.Open(res["NBR"]), gdal.Open(nbr[label])
+        same = x.GetGeoTransform() == y.GetGeoTransform() and x.RasterXSize == y.RasterXSize
+        a, b = x.ReadAsArray().astype(float), y.ReadAsArray().astype(float)
+        ok = (a != -9999) & (b != -9999)
+        r = np.corrcoef(a[ok], b[ok])[0, 1]
+        check(f"local {label} NBR matches HLS on the same grid (r {r:.3f}, mean diff {np.mean(a[ok] - b[ok]):+.3f})",
+              same and r > 0.99, " | ".join(log))
 
 print(f"\n{'ALL PASSED' if not failed else f'{failed} FAILED'}")
 if _app is not None:

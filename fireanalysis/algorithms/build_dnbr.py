@@ -158,7 +158,7 @@ class BuildDnbr(QgsProcessingAlgorithm):
         feedback.setProgress(30)
 
         # --- offset ---
-        offset, std, n = 0.0, 0.0, 0
+        offset, std, robust, n = 0.0, 0.0, 0.0, 0
         if method == OFFSET_FIXED:
             offset = self.parameterAsDouble(parameters, self.OFFSET_VALUE, context)
             feedback.pushInfo(f'Fixed dNBR offset: {offset:.4f}')
@@ -218,7 +218,8 @@ class BuildDnbr(QgsProcessingAlgorithm):
         # --- outputs ---
         metadata = {'FIREANALYSIS_VERSION': VERSION, 'DNBR_OFFSET': f'{offset:.6f}',
                     'DNBR_OFFSET_METHOD': OFFSET_METHODS[method],
-                    'DNBR_OFFSET_STD': f'{std:.6f}', 'DNBR_OFFSET_N': n}
+                    'DNBR_OFFSET_STD': f'{std:.6f}', 'DNBR_OFFSET_ROBUST_STD': f'{robust:.6f}',
+                    'DNBR_OFFSET_N': n}
         for prefix, ds in (('PRE', pre_ds), ('POST', post_ds)):
             for key, value in (ds.GetMetadata() or {}).items():
                 if key.startswith(('HLS_', 'FMASK_')):

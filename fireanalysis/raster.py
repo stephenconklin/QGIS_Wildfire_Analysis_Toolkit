@@ -1,11 +1,45 @@
-"""GDAL helpers shared by the algorithms: read on a reference grid, rasterize
-QGIS geometries, write outputs."""
+"""GDAL helpers shared by the algorithms: the analysis grid, read on a reference
+grid, rasterize QGIS geometries, write outputs."""
+import math
 import os
 
 from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsGeometry,
                        QgsProcessingException, QgsRasterFileWriter)
 
 NODATA = -9999.0
+
+
+def utm_crs(lon, lat):
+    zone = min(int((lon + 180) // 6) + 1, 60)
+    return QgsCoordinateReferenceSystem(f'EPSG:{(32600 if lat >= 0 else 32700) + zone}')
+
+
+def analysis_grid(aoi_4326, crs, buffer_m, pixel, transform_context):
+    """(crs, bounds, ncols, nrows) for an AOI in EPSG:4326: AOI + buffer in crs
+    (default: UTM zone of the AOI centroid), bounds snapped outward to whole
+    pixels. The same AOI, buffer, CRS and pixel always give the same grid."""
+    if crs is None or not crs.isValid():
+        c = aoi_4326.centroid().asPoint()
+        crs = utm_crs(c.x(), c.y())
+    if crs.isGeographic():
+        raise QgsProcessingException('The target CRS must be projected, in meters.')
+    area = QgsGeometry(aoi_4326)
+    area.transform(QgsCoordinateTransform(QgsCoordinateReferenceSystem('EPSG:4326'), crs, transform_context))
+    box = area.buffer(buffer_m, 16).boundingBox() if buffer_m > 0 else area.boundingBox()
+    bounds = (math.floor(box.xMinimum() / pixel) * pixel, math.floor(box.yMinimum() / pixel) * pixel,
+              math.ceil(box.xMaximum() / pixel) * pixel, math.ceil(box.yMaximum() / pixel) * pixel)
+    ncols, nrows = int(round((bounds[2] - bounds[0]) / pixel)), int(round((bounds[3] - bounds[1]) / pixel))
+    if ncols * nrows > 40_000_000:
+        raise QgsProcessingException(
+            f'The area is {ncols} x {nrows} pixels; that is too large. Use a smaller AOI or buffer.')
+    return crs, bounds, ncols, nrows
+
+
+def crs_wkt(crs):
+    from osgeo import osr
+    srs = osr.SpatialReference()
+    srs.SetFromUserInput(crs.toWkt())
+    return srs.ExportToWkt()
 
 
 def open_raster(layer_or_path):

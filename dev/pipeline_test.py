@@ -1,6 +1,7 @@
 """
-Offline test for the fireanalysis algorithms that need no network (so far:
-Build dNBR). The online HLS test is dev/online_test.py.
+Offline test for the fireanalysis algorithms that need no network: Prepare
+local scene NBR (on synthetic Landsat and Sentinel-2 products), Build dNBR and
+Classify severity. The online HLS test is dev/online_test.py.
 
 Inside QGIS (Python Console):
     exec(open('/path/to/QGIS_Burn_Severity/dev/pipeline_test.py').read())
@@ -11,7 +12,9 @@ Headless (macOS):
 Builds a synthetic post-fire NBR on the testdata/dnbr.tif grid (pre-fire NBR
 resampled to that grid, minus the dNBR). Build dNBR must then give back
 dnbr.tif, an offset that matches an independent OGR/GDAL calculation, and
-RdNBR/RBR that match their formulas.
+RdNBR/RBR that match their formulas. Classify severity must put each pixel in
+the class its thresholds say, estimate thresholds by its stated rules, and
+refuse bad input.
 """
 import os
 import sys
@@ -38,6 +41,8 @@ from osgeo import gdal, ogr  # noqa: E402
 
 from fireanalysis import VERSION  # noqa: E402
 from fireanalysis.algorithms.build_dnbr import BuildDnbr  # noqa: E402
+from fireanalysis.algorithms.classify_severity import ClassifySeverity, match_threshold  # noqa: E402
+from fireanalysis.algorithms.prepare_local_nbr import PrepareLocalNbr  # noqa: E402
 
 gdal.UseExceptions()
 T = os.path.join(REPO, "testdata") + os.sep
@@ -206,6 +211,153 @@ for name, params, text in [
     p.update(params)
     res, log = _run(BuildDnbr(), p)
     check(name, res is None and any(text in m for m in log), " | ".join(log))
+
+
+# 6. Classify severity with given thresholds: every pixel in the right class
+BURN_MASK = burn(union)
+res, log = _run(ClassifySeverity(), {"DNBR": T + "dnbr.tif", "PERIMETER": BURN, "LOW_T": 0.1, "MODERATE_T": 0.27,
+                                     "HIGH_T": 0.66, "OUTPUT": os.path.join(OUT, "classes.tif")})
+check("classify, given thresholds: runs", res is not None, " | ".join(log))
+if res:
+    got = gdal.Open(res["OUTPUT"]).ReadAsArray()
+    want = np.zeros(dnbr.shape, np.uint8)
+    v = np.isfinite(dnbr)
+    want[BURN_MASK] = 6
+    want[BURN_MASK & v] = 1
+    for code, t in ((2, 0.1), (3, 0.27), (4, 0.66)):
+        want[BURN_MASK & v & (dnbr >= t)] = code
+    want[BURN_MASK & v & (dnbr <= -0.15)] = 5
+    check(f"classify: classes match ({int((got != want).sum())} pixels differ)", int((got != want).sum()) == 0)
+    check("classify: 0 outside the burned area", int(got[~BURN_MASK].max()) == 0)
+    check("classify: style file written", os.path.exists(os.path.splitext(res["OUTPUT"])[0] + ".qml"))
+    check("classify: thresholds returned", (res["LOW_T"], res["MODERATE_T"], res["HIGH_T"]) == (0.1, 0.27, 0.66))
+
+# 7. Offline estimates: low = offset + 2 robust sd (rounded to 0.005); high matches the RdNBR pattern
+#    in dense vegetation; moderate midway
+res, log = _run(ClassifySeverity(), {"DNBR": T + "dnbr.tif", "PRE_NBR": T + "prefire_nbr.tif", "PERIMETER": BURN,
+                                     "ESTIMATE": 1, "OFFSET": 0.0126, "OFFSET_STD": 0.0428,
+                                     "OUTPUT": os.path.join(OUT, "classes_est.tif")})
+check("classify, estimated: runs", res is not None, " | ".join(log))
+if res:
+    check(f"estimated low {res['LOW_T']:.3f} = round(0.0126 + 2 x 0.0428)", abs(res["LOW_T"] - 0.1) < 1e-9)
+    hi = res["HIGH_T"]
+    check(f"estimated moderate {res['MODERATE_T']:.3f} midway to high {hi:.3f}",
+          hi >= 9.999 or abs(res["MODERATE_T"] - round((0.1 + hi) / 2 * 200) / 200) < 1e-9)
+    for line in log:
+        if "threshold:" in line:
+            print("      " + line)
+a = np.linspace(-0.2, 1.2, 10001)
+t, f1 = match_threshold(a, a >= 0.4)
+check(f"match_threshold finds an exact pattern (0.4 -> {t:.3f}, F1 {f1:.2f})", abs(t - 0.4) < 1e-9 and f1 == 1.0)
+
+for name, params, text in [
+        ("classify: estimating high from own data needs the pre-fire NBR", {"ESTIMATE": 1}, "needs the pre-fire NBR"),
+        ("classify: thresholds must increase", {"LOW_T": 0.3, "MODERATE_T": 0.2, "HIGH_T": 0.6}, "must increase"),
+        ("classify: x1000 dNBR is refused", {"DNBR": SCALED, "LOW_T": 0.1, "MODERATE_T": 0.27, "HIGH_T": 0.66},
+         "looks scaled")]:
+    p = {"DNBR": T + "dnbr.tif", "PERIMETER": BURN, "OUTPUT": os.path.join(OUT, "never_c.tif")}
+    p.update(params)
+    res, log = _run(ClassifySeverity(), p)
+    check(name, res is None and any(text in m for m in log), " | ".join(log))
+
+
+# 8. Prepare local scene NBR on synthetic products with known DN
+from osgeo import osr  # noqa: E402
+AOI_SMALL = os.path.join(OUT, "aoi.geojson")
+with open(AOI_SMALL, "w") as f:  # about 3 x 3 km near Bright Angel, EPSG:4326
+    f.write('{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":'
+            '{"type":"Polygon","coordinates":[[[-112.05,36.20],[-112.02,36.20],[-112.02,36.23],'
+            '[-112.05,36.23],[-112.05,36.20]]]}}]}')
+
+
+def fake_band(path, value, px, epsg=32612, origin=(398000, 4016000), size=(800, 800), dtype=gdal.GDT_UInt16,
+              array=None):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    ds = gdal.GetDriverByName("GTiff").Create(path, size[0], size[1], 1, dtype)
+    ds.SetGeoTransform((origin[0], px, 0, origin[1], 0, -px))
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(epsg)
+    ds.SetProjection(srs.ExportToWkt())
+    ds.GetRasterBand(1).WriteArray(array if array is not None else np.full((size[1], size[0]), value))
+    ds = None
+
+
+def run_local(folder, **extra):
+    p = {"SCENE": folder, "AOI": AOI_SMALL, "BUFFER": 0, "NBR": os.path.join(OUT, os.path.basename(folder) + ".tif")}
+    p.update(extra)
+    res, log = _run(PrepareLocalNbr(), p)
+    if res is None:
+        return None, log
+    a = gdal.Open(res["NBR"]).ReadAsArray().astype(float)
+    return a, log
+
+
+# Landsat 9 scene: NIR DN 20000, SWIR2 DN 12000 -> reflectance 0.35, 0.13 -> NBR 0.4583
+LS = os.path.join(OUT, "LC09_L2SP_037034_20250915_20250916_02_T1")
+fake_band(f"{LS}/LC09_L2SP_037034_20250915_20250916_02_T1_SR_B5.TIF", 20000, 30)
+fake_band(f"{LS}/LC09_L2SP_037034_20250915_20250916_02_T1_SR_B7.TIF", 12000, 30)
+with open(f"{LS}/LC09_L2SP_037034_20250915_20250916_02_T1_MTL.txt", "w") as f:
+    f.write("REFLECTANCE_MULT_BAND_5 = 2.75E-05\nREFLECTANCE_ADD_BAND_5 = -0.200000\n"
+            "REFLECTANCE_MULT_BAND_7 = 2.75E-05\nREFLECTANCE_ADD_BAND_7 = -0.200000\n")
+a, log = run_local(LS)
+want = (0.35 - 0.13) / (0.35 + 0.13)
+check(f"local Landsat: NBR from scaled reflectance ({want:.4f}), whole AOI covered",
+      a is not None and abs(np.nanmax(a) - want) < 1e-5 and abs(a[a != -9999].min() - want) < 1e-5
+      and (a != -9999).all(), " | ".join(log))
+check("local Landsat: calibration read from the MTL", any("from the metadata" in m for m in log), " | ".join(log))
+raw_dn = (20000 - 12000) / (20000 + 12000)
+check(f"local Landsat: not the raw-DN NBR ({raw_dn:.4f})", a is not None and abs(np.nanmax(a) - raw_dn) > 0.1)
+
+# QA_PIXEL: cloud bit (3) on the top half -> masked
+qa = np.zeros((800, 800), np.uint16)
+qa[:, :300] = 1 << 3  # column 300 runs through the AOI
+fake_band(f"{LS}/LC09_L2SP_037034_20250915_20250916_02_T1_QA_PIXEL.TIF", 0, 30, array=qa)
+a, log = run_local(LS)
+gt_ok = a is not None
+check("local Landsat: QA_PIXEL cloud bit masks pixels", gt_ok and 0 < (a == -9999).mean() < 1, " | ".join(log))
+
+# Sentinel-2 L2A after 2022 without MTD: offset -1000 by date. NIR DN 4500, SWIR2 DN 2300 -> 0.35, 0.13
+S2 = os.path.join(OUT, "S2_20240913")
+fake_band(f"{S2}/T12SUF_20240913T180919_B8A_20m.tif", 4500, 20)
+fake_band(f"{S2}/T12SUF_20240913T180919_B12_20m.tif", 2300, 20)
+a, log = run_local(S2)
+check(f"local Sentinel-2 (2024, no MTD): offset -1000 applied, NBR {want:.4f}",
+      a is not None and abs(a[a != -9999].mean() - want) < 1e-5, " | ".join(log))
+check("local Sentinel-2: 20 m averaged to 30 m", any("average" in m for m in log), " | ".join(log))
+
+# With an MTD that says offset 0 (old baseline): DN/10000 -> 0.45, 0.23
+with open(f"{S2}/MTD_MSIL2A.xml", "w") as f:
+    f.write("<x><SPACECRAFT_NAME>Sentinel-2A</SPACECRAFT_NAME><BOA_QUANTIFICATION_VALUE unit=\"none\">10000"
+            "</BOA_QUANTIFICATION_VALUE></x>")
+a, log = run_local(S2)
+want0 = (0.45 - 0.23) / (0.45 + 0.23)
+check(f"local Sentinel-2 with MTD and no offset: NBR {want0:.4f}",
+      a is not None and abs(a[a != -9999].mean() - want0) < 1e-5, " | ".join(log))
+with open(f"{S2}/MTD_MSIL2A.xml", "w") as f:
+    f.write("<x><SPACECRAFT_NAME>Sentinel-2B</SPACECRAFT_NAME><BOA_QUANTIFICATION_VALUE>10000</BOA_QUANTIFICATION_VALUE>"
+            + "".join(f'<BOA_ADD_OFFSET band_id="{i}">-1000</BOA_ADD_OFFSET>' for i in range(13)) + "</x>")
+a, log = run_local(S2)
+check("local Sentinel-2 with MTD offsets: read from the file",
+      a is not None and abs(a[a != -9999].mean() - want) < 1e-5 and any("from MTD_MSIL2A.xml" in m for m in log),
+      " | ".join(log))
+
+# Before 2022 without MTD: refuse unless the offset is set
+S2OLD = os.path.join(OUT, "S2_20210601")
+fake_band(f"{S2OLD}/T12SUF_20210601T180919_B8A_20m.tif", 4500, 20)
+fake_band(f"{S2OLD}/T12SUF_20210601T180919_B12_20m.tif", 2300, 20)
+a, log = run_local(S2OLD)
+check("local Sentinel-2 before 2022 without MTD is refused", a is None and any("BOA offset" in m for m in log),
+      " | ".join(log))
+a, log = run_local(S2OLD, S2_OFFSET=2)
+check("... and runs with the offset set to 0", a is not None and abs(a[a != -9999].mean() - want0) < 1e-5,
+      " | ".join(log))
+import shutil  # noqa: E402
+MIXED = os.path.join(OUT, "mixed")
+shutil.copytree(LS, os.path.join(MIXED, "ls"))
+shutil.copytree(S2, os.path.join(MIXED, "s2"))
+a, log = run_local(MIXED)
+check("local: a folder with Landsat and Sentinel-2 is refused", a is None and any("both Landsat" in m for m in log),
+      " | ".join(log))
 
 print(f"\n{'ALL PASSED' if not failed else f'{failed} FAILED'}")
 if _app is not None:

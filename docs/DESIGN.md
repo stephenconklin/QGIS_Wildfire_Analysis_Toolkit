@@ -104,11 +104,12 @@ fetching always mosaics.
 |---|---|---|---|
 | 1 | Find HLS scenes | `fireanalysis:findhlsscenes` | done (2.0.0-dev) |
 | 1 | Fetch HLS NBR | `fireanalysis:fetchhlsnbr` | done (2.0.0-dev) |
-| 2 | Prepare local scene (Landsat C2 L2, ARD, Sentinel-2 L2A) | | next |
 | 2 | Build dNBR (align, offset, RdNBR, RBR) | `fireanalysis:builddnbr` | done (2.0.0-dev) |
+| 2 | Prepare local scene NBR (Landsat C2 L2, ARD, Sentinel-2 L2A) | `fireanalysis:preparelocalnbr` | done (2.0.0-dev) |
 | 3 | Planetary Computer and Earth Search providers | | |
-| 4 | Scene pair suggestion (AOI-clear %, day-of-year match) | | |
-| 5 | Perimeter draft; offset and threshold estimates; `dnbr6` | | |
+| 4 | Scene pair suggestion (AOI-clear %, day-of-year match) | `fireanalysis:suggesthlspairs` | done (2.0.0-dev) |
+| 5 | Threshold estimates and `dnbr6` | `fireanalysis:classifyseverity` | done (2.0.0-dev) |
+| 5 | Perimeter draft | | |
 | 5 | Burn severity summary | `fireanalysis:burnseveritysummary` | done (1.1.0) |
 | 6 | Package and report (metadata JSON, QML, layout PDF) | | |
 
@@ -187,5 +188,39 @@ std 0.053, robust 0.037, 0.1 % of the ring above 0.27. Around the clipped
 test-data perimeter the ring runs into the fire (14 % above 0.27, std 0.22),
 which is what the burned-sample warning catches. The median still held (0.036).
 
-**Still to do:** a fire MTBS has mapped, to compare our offset, thresholds and
-`dnbr6` with the published ones.
+**Done (2026-10-06): 17 published MTBS fires.** `dev/mtbs_validation.py` reruns
+every MTBS wildfire over 15,000 acres in AZ, NM, CO and UT from 2022 to 2024 (Yellow
+Lake 2024 was not yet in the image service) from HLS, with MTBS's pre/post dates
+and sensor family, perimeter and thresholds, and compares the classes with the
+MTBS `dnbr6` mosaic inside the fire's own perimeter (the yearly mosaic also holds
+neighbouring fires: Pipeline 2022 borders Tunnel 2022, which had burned before
+Pipeline's pre-fire date; comparing the whole mosaic first gave a false 63 %).
+
+- Mean agreement 88.7 %, kappa 0.775 (0.711 to 0.864); within one class on at
+  least 99.8 % of pixels; high-severity share within 1 point. Landsat (L8, L9,
+  L8 to L9) and Sentinel-2 (S2A, S2B, mixed) pairs do equally well.
+- Oracle thresholds (best reproduction of MTBS's classes on our dNBR) are within
+  6 (low) and 12 (high), x1000, of MTBS's on average: our dNBR is on the MTBS scale.
+- Ring offset vs MTBS's sampled offset: median difference 9, up to 47 (x1000).
+
+**Threshold estimates** (`dev/threshold_study.py`, leave-one-out on the same
+fires): MAE x1000 for low / moderate / high and mean kappa of the classes.
+
+| Rule | Low | Mod | High | Kappa |
+|---|---|---|---|---|
+| MTBS's own thresholds | | | | 0.775 |
+| Median of nearby MTBS fires, 150 km, 10 years | 21 | 55 | 88 | 0.56 |
+| Same, 100 km / 250 km | 20 / 18 | 53 / 60 | 86 / 96 | 0.57 / 0.57 |
+| Offset + 2 SD (ring) | 53 | | | |
+| Offset + 2 robust SD (ring) | 35 | | | 0.49 (with the two rules below) |
+| RdNBR >= 750 match, all pixels | | | 265 | |
+| RdNBR >= 750 match where pre-fire NBR >= 0.5 | | | 52 (no high: 4 wrong of 17) | |
+| Moderate midway between MTBS low and high | | 29 | | |
+| Key & Benson 100 / 270 / 660 | | 51 | 169 | 0.48 |
+
+Everything plateaus near kappa 0.56: the gap to 0.775 is the analyst's judgment
+(MTBS high thresholds run from 350 to 775 on fires of similar vegetation). The
+default is the nearby-fires median: general, explainable, and it carries
+regional analyst practice. The plain RdNBR >= 750 match fails in the Southwest
+because sparse pre-fire vegetation inflates RdNBR (half of these fires' area
+reaches 750), which the FMT3 guide warns about for heterogeneous cover.
