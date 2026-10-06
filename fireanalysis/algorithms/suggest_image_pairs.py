@@ -47,6 +47,62 @@ def doy_gap(a, b):
     return min(d, 365 - d)
 
 
+def candidate_dates(source, rows, aoi, context, feedback, label):
+    """{(date, sensor): (clear %, data %, [ids])} for every date in rows, where rows are
+    (date iso, id, sensor, item or None) from SuggestImagePairs._search. Quality bands
+    are read for several dates at once; messages are written on the calling thread."""
+    from concurrent.futures import ThreadPoolExecutor
+    from .fetch_hls_nbr import aoi_grid, clear_share_on
+    from .planetary_algorithms import scene_clear_share_on
+    groups = sorted({(r[0], r[2]) for r in rows})
+    feedback.pushInfo(f'{label}: {len(groups)} dates to check.')
+    if not groups:
+        return {}
+    grid = aoi_grid(aoi, context.transformContext())
+    jobs = {g: [r for r in rows if (r[0], r[2]) == g] for g in groups}
+    scenes = {}
+    if source == 'hls':
+        try:
+            earthdata.configure_gdal()
+        except earthdata.EarthdataError as e:
+            raise QgsProcessingException(str(e)) from None
+    else:  # sign the URLs here, not in the worker threads
+        for g in groups:
+            try:
+                scenes[g] = planetary.items_to_scene([r[3] for r in jobs[g]], source, feedback)
+            except planetary.PlanetaryError as e:
+                warn(feedback, f'  {g[0]} {g[1]}: {e}; skipped.')
+
+    def one(group):
+        error = None
+        for _attempt in range(2):  # a read now and then fails under load; try once more
+            if feedback.isCanceled():
+                return group, None, 'cancelled'
+            try:
+                if source == 'hls':
+                    return group, clear_share_on([r[1] for r in jobs[group]], grid, feedback), None
+                if group not in scenes:
+                    return group, None, 'no scene'
+                return group, scene_clear_share_on(scenes[group], grid, feedback), None
+            except Exception as e:  # reported below, on this thread
+                error = str(e)
+        return group, None, error
+
+    out = {}
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        for (date, sensor), result, error in pool.map(one, groups):
+            if error in ('cancelled', 'no scene') or feedback.isCanceled():
+                continue
+            if error or result is None or result[0] is None:
+                warn(feedback, f'  {date} {sensor}: could not read the quality band ({error}); skipped.')
+                continue
+            feedback.pushInfo(f'  {date} {sensor}: {result[0]:.0f} % clear')
+            out[(datetime.date.fromisoformat(date), sensor)] = (result[0], result[1],
+                                                                [r[1] for r in jobs[(date, sensor)]])
+    return out
+
+
+
 class SuggestImagePairs(QgsProcessingAlgorithm):
     SOURCE = 'SOURCE'
     AOI = 'AOI'
@@ -150,58 +206,6 @@ class SuggestImagePairs(QgsProcessingAlgorithm):
             rows.append((planetary.item_date(item).isoformat(), item['id'], SHORT.get(platform, platform), item))
         return rows
 
-    def _dates(self, source, rows, aoi, context, feedback, label):
-        """{(date, sensor): (clear %, [ids])} for every date in rows. Quality bands are read
-        for several dates at once; messages are written here, on the algorithm's thread."""
-        from concurrent.futures import ThreadPoolExecutor
-        from .fetch_hls_nbr import aoi_grid, clear_share_on
-        from .planetary_algorithms import scene_clear_share_on
-        groups = sorted({(r[0], r[2]) for r in rows})
-        feedback.pushInfo(f'{label}: {len(groups)} dates to check.')
-        if not groups:
-            return {}
-        grid = aoi_grid(aoi, context.transformContext())
-        jobs = {g: [r for r in rows if (r[0], r[2]) == g] for g in groups}
-        scenes = {}
-        if source == 'hls':
-            try:
-                earthdata.configure_gdal()
-            except earthdata.EarthdataError as e:
-                raise QgsProcessingException(str(e)) from None
-        else:  # sign the URLs here, not in the worker threads
-            for g in groups:
-                try:
-                    scenes[g] = planetary.items_to_scene([r[3] for r in jobs[g]], source, feedback)
-                except planetary.PlanetaryError as e:
-                    warn(feedback, f'  {g[0]} {g[1]}: {e}; skipped.')
-
-        def one(group):
-            error = None
-            for _attempt in range(2):  # a read now and then fails under load; try once more
-                if feedback.isCanceled():
-                    return group, None, 'cancelled'
-                try:
-                    if source == 'hls':
-                        return group, clear_share_on([r[1] for r in jobs[group]], grid, feedback), None
-                    if group not in scenes:
-                        return group, None, 'no scene'
-                    return group, scene_clear_share_on(scenes[group], grid, feedback), None
-                except Exception as e:  # reported below, on this thread
-                    error = str(e)
-            return group, None, error
-
-        out = {}
-        with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-            for (date, sensor), result, error in pool.map(one, groups):
-                if error in ('cancelled', 'no scene') or feedback.isCanceled():
-                    continue
-                if error or result is None or result[0] is None:
-                    warn(feedback, f'  {date} {sensor}: could not read the quality band ({error}); skipped.')
-                    continue
-                feedback.pushInfo(f'  {date} {sensor}: {result[0]:.0f} % clear')
-                out[(datetime.date.fromisoformat(date), sensor)] = (result[0], [r[1] for r in jobs[(date, sensor)]])
-        return out
-
     def processAlgorithm(self, parameters, context, feedback):
         aoi = aoi_geometry(self.parameterAsSource(parameters, self.AOI, context), context)
         start = self.parameterAsDateTime(parameters, self.FIRE_START, context).date().toPyDate()
@@ -229,7 +233,7 @@ class SuggestImagePairs(QgsProcessingAlgorithm):
 
         feedback.pushInfo(f'Post-fire window {post_from} to {post_to}.')
         post_rows = self._search(source, aoi, post_from, post_to, sensors, context, feedback)
-        post = {k: v for k, v in self._dates(source, post_rows, aoi, context, feedback, 'Post-fire').items()
+        post = {k: v for k, v in candidate_dates(source, post_rows, aoi, context, feedback, 'Post-fire').items()
                 if v[0] >= min_clear}
         if feedback.isCanceled():
             return {}
@@ -250,15 +254,15 @@ class SuggestImagePairs(QgsProcessingAlgorithm):
             if to >= frm:
                 feedback.pushInfo(f'Pre-fire window {frm} to {to}.')
                 pre_rows += self._search(source, aoi, frm, to, sensors, context, feedback)
-        pre = {k: v for k, v in self._dates(source, pre_rows, aoi, context, feedback, 'Pre-fire').items()
+        pre = {k: v for k, v in candidate_dates(source, pre_rows, aoi, context, feedback, 'Pre-fire').items()
                if v[0] >= min_clear}
         if feedback.isCanceled():
             return {}
         feedback.setProgress(90)
 
         pairs = []
-        for (pd, ps), (pc, pg) in post.items():
-            for (qd, qs), (qc, qg) in pre.items():
+        for (pd, ps), (pc, _, pg) in post.items():
+            for (qd, qs), (qc, _, qg) in pre.items():
                 gap = doy_gap(pd, qd)
                 if gap <= season and qd < start:
                     pairs.append((gap, -round(min(pc, qc)), pd.year - qd.year, qd, qs, qc, qg, pd, ps, pc, pg))

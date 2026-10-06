@@ -9,7 +9,7 @@ from qgis.core import (QgsCoordinateReferenceSystem, QgsProcessingParameterBoole
                        QgsProcessingParameterNumber)
 from qgis.PyQt.QtCore import QDate
 
-from .. import VERSION, earthdata, hls, stac
+from .. import VERSION, hls, stac
 from ..compat import date_type, field, integer_type, polygon_source, polygon_wkb, warn
 
 WGS84 = 'EPSG:4326'
@@ -161,22 +161,12 @@ class FindHlsScenes(QgsProcessingAlgorithm):
             return {}
         clear = {}
         if self.parameterAsBoolean(parameters, self.AOI_CLEAR, context) and rows:
-            from .fetch_hls_nbr import clear_share
-            groups = sorted({(r[0], r[2]) for r in rows})
-            feedback.pushInfo(f'Measuring the clear share inside the AOI for {len(groups)} dates...')
-            for i, (date, sensor) in enumerate(groups):
-                if feedback.isCanceled():
-                    return {}
-                try:
-                    c, d = clear_share([r[1] for r in rows if (r[0], r[2]) == (date, sensor)], aoi, context, feedback)
-                except earthdata.EarthdataError as e:
-                    raise QgsProcessingException(str(e)) from None
-                except (QgsProcessingException, RuntimeError) as e:
-                    raise QgsProcessingException(f'Could not read Fmask for {sensor} {date}: {e}') from None
-                clear[(date, sensor)] = (c, d)
-                if c is not None:
-                    feedback.pushInfo(f'  {date} {sensor}: {c:.0f} % clear, {d:.0f} % with data')
-                feedback.setProgress(100 * (i + 1) / len(groups))
+            from .suggest_image_pairs import candidate_dates
+            found = candidate_dates('hls', [(r[0], r[1], r[2], None) for r in rows], aoi, context, feedback,
+                                    'Clear share inside the AOI')
+            clear = {(d.isoformat(), sensor): (c, data) for (d, sensor), (c, data, _) in found.items()}
+            if feedback.isCanceled():
+                return {}
         for date, granule, sensor, tile, doy, cloud, pct, dt, geom in rows:
             feat = QgsFeature(fields)
             feat.setGeometry(geom)

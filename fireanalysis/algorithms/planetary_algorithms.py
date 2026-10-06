@@ -10,7 +10,7 @@ from qgis.core import (QgsCoordinateReferenceSystem, QgsDistanceArea, QgsFeature
                        QgsProcessingParameterRasterDestination, QgsProcessingParameterString)
 
 from .. import VERSION, planetary, stac
-from ..compat import date_type, double_type, field, integer_type, polygon_source, polygon_wkb, warn
+from ..compat import date_type, double_type, field, integer_type, polygon_source, polygon_wkb
 from .find_hls_scenes import WGS84, aoi_geometry
 from .prepare_local_nbr import MASK_CLASSES, write_scene_nbr
 
@@ -127,20 +127,14 @@ class FindPlanetaryScenes(QgsProcessingAlgorithm):
         rows.sort(key=lambda r: (r[0], r[1]))
         clear = {}
         if self.parameterAsBoolean(parameters, self.AOI_CLEAR, context) and rows:
-            dates = sorted({r[0] for r in rows})
-            feedback.pushInfo(f'Measuring the clear share inside the AOI for {len(dates)} dates...')
-            for i, date in enumerate(dates):
-                if feedback.isCanceled():
-                    return {}
-                try:
-                    scene = planetary.items_to_scene([r[7] for r in rows if r[0] == date], source, feedback)
-                    clear[date] = scene_clear_share(scene, aoi, context, feedback)
-                except (planetary.PlanetaryError, RuntimeError) as e:
-                    warn(feedback, f'  {date}: {e}')
-                    continue
-                if clear[date][0] is not None:
-                    feedback.pushInfo(f'  {date}: {clear[date][0]:.0f} % clear')
-                feedback.setProgress(100 * (i + 1) / len(dates))
+            from .suggest_image_pairs import SHORT, candidate_dates
+            found = candidate_dates(source, [(r[0], r[1], SHORT.get(str(r[2]).lower(), r[2]), r[7]) for r in rows],
+                                    aoi, context, feedback, 'Clear share inside the AOI')
+            for (d, sensor), (c, data, ids) in found.items():
+                for iid in ids:
+                    clear[iid] = (c, data)
+            if feedback.isCanceled():
+                return {}
 
         fields = QgsFields()
         for name, kind, length in (('item', 'string', 80), ('collection', 'string', 20), ('platform', 'string', 20),
@@ -151,7 +145,7 @@ class FindPlanetaryScenes(QgsProcessingAlgorithm):
         sink, dest_id = self.parameterAsSink(parameters, self.OUTPUT, context, fields, polygon_wkb(),
                                              QgsCoordinateReferenceSystem(WGS84))
         for date, iid, platform, label, doy, cloud, pct, item, geom in rows:
-            c, d = clear.get(date, (None, None))
+            c, d = clear.get(iid, (None, None))
             feat = QgsFeature(fields)
             feat.setGeometry(geom)
             feat.setAttributes([iid, planetary.SOURCES[source][0], platform, label, date, doy,
