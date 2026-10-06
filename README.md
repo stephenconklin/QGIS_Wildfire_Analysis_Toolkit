@@ -100,6 +100,8 @@ Output: one footprint per granule with `granule`, `sensor`, `tile`, `date`, `doy
 
 The grid is snapped to whole 30 m pixels in the target CRS, so a pre-fire and a post-fire run with the same AOI and CRS line up exactly.
 
+**Find Landsat / Sentinel-2 scenes** and **Fetch Landsat / Sentinel-2 NBR** (`fireanalysis:findplanetaryscenes`, `fireanalysis:fetchplanetarynbr`) do the same from [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/), which needs no account: Landsat Collection 2 Level-2 from Landsat 4 to 9 (1982 on), the product MTBS itself uses, and Sentinel-2 L2A (20 m bands; set the pixel size to 20). Use them for fires before HLS (2013) or when you want the exact Landsat scene MTBS used. Find takes the AOI, dates, imagery (Landsat or Sentinel-2), maximum scene cloud cover and, optionally, the clear share inside the AOI from QA_PIXEL or SCL; its fields are `item`, `collection`, `platform`, `scene` (path/row or tile), `date`, `doy`, `cloud`, `aoi_pct`, `aoi_clear`, `aoi_data`. Fetch takes the scenes layer (or item ids), buffer, target CRS, pixel size and mask classes, and writes NBR (and optionally the reflectance stack) on the same grid as the other imagery algorithms. Calibration comes from the STAC item: Landsat DN × 0.0000275 − 0.2; Sentinel-2 (DN − 1000) / 10,000 for processing baseline 04.00 and later. For Cerro Pelado 2022, Planetary Computer Landsat 8 gives classes that agree with MTBS at kappa 0.746 (HLS: 0.723), and its dNBR correlates with HLS at r = 0.991.
+
 **Prepare local scene NBR** (`fireanalysis:preparelocalnbr`) does the same for files you downloaded yourself: Landsat Collection 2 Level-2 (a scene or a US ARD tile; Landsat 4–9) or Sentinel-2 L2A. Use it for fires before 2013, for 20 m Sentinel-2, or when you already have the scenes. The output grid is the same one *Fetch HLS NBR* uses, so local and HLS NBR can be mixed.
 
 | Parameter | Description |
@@ -136,6 +138,8 @@ Calibration: Landsat reflectance = DN × 0.0000275 − 0.2 (read from the metada
 The log warns when the offset is beyond ±0.1 (a poorly matched pair), when the sample spreads widely (standard deviation above 0.05), and when more than 2 % of the sample has dNBR above 0.27, which means the "unburned" sample contains burned land, usually because the burned-area polygons are incomplete or clipped. The dNBR feeds *Burn severity summary* directly.
 
 For Dragon Bravo (HLS S30 2024-09-13 and L30 2025-09-15, full Lab 6 perimeter), the ring offset is 0.026 with a standard deviation of 0.053.
+
+**Draft burned-area perimeter** (`fireanalysis:draftperimeter`) drafts burned-area polygons from dNBR when there is no perimeter yet: pixels at or above a dNBR threshold (default 0.05), patches smaller than 20 ha removed, unburned holes up to 2 ha filled. Optional seed polygons (a buffer around the ignition point, a rough outline) keep only the patches that touch them. MTBS analysts digitize perimeters by hand; this draft is for editing. Against the 18 MTBS perimeters in the validation set it reaches a mean intersection over union of 0.69 without a seed and 0.73 seeded with a 1 km circle around the MTBS fire location. The seed fails when that point is not in a burned patch, which happened twice (`dev/perimeter_study.py`).
 
 **Classify severity (MTBS classes)** (`fireanalysis:classifyseverity`) writes the MTBS thematic classes (`dnbr6`) inside the burned area: 1 unburned to low, 2 low, 3 moderate, 4 high, 5 increased greenness, 6 non-mapping (no data), 0 outside. A class starts at its threshold (dNBR ≥ threshold); increased greenness is dNBR ≤ −0.150. A `.qml` file next to the raster gives it the MTBS colors when QGIS loads it.
 
@@ -198,6 +202,19 @@ The thresholds that best reproduce MTBS's classes on our dNBR are, on average, w
 | Key & Benson (2006) generic 0.10 / 0.27 / 0.66 | 0.48 |
 
 So the imagery and calibration reproduce MTBS, while the automatic thresholds recover only part of the analyst's judgment. Review estimated thresholds before using the classes.
+
+**Before HLS.** `dev/mtbs_validation.py --pc` runs six earlier Southwest fires through Planetary Computer Landsat with MTBS's dates:
+
+| Fire | Year | Landsat | Agreement | Kappa |
+|---|---|---|---|---|
+| Cerro Grande, NM | 2000 | 7 → 5 | 75.6 % | 0.670 |
+| Rodeo, AZ | 2002 | 7 → 5 | 70.9 % | 0.602 |
+| Warm, AZ | 2006 | 5 → 5 | 79.2 % | 0.721 |
+| Schultz, AZ | 2010 | 5 → 5 | 81.3 % | 0.735 |
+| Las Conchas, NM | 2011 | 5 → 7 | 73.4 % | 0.624 |
+| Whitewater-Baldy, NM | 2012 | 5 → 8 | 84.6 % | 0.770 |
+
+Mean kappa 0.69, with at least 99.1 % of pixels within one class. Agreement is lower than for recent fires, most of all for pairs that mix Landsat 5 and 7, where MTBS's offset also differs most from ours (58 vs 14 for Cerro Grande, 78 vs 41 for Rodeo, ×1000). Las Conchas has a Landsat 7 post-fire scene with scan-line gaps. The older MTBS assessments were made with earlier Landsat processing, which may account for part of the difference. Use historical classes with that in mind.
 
 ## Inputs
 
@@ -344,12 +361,13 @@ Plotting percent puts zones of different sizes on the same scale. Use the `ac_` 
 | Path | Purpose |
 |---|---|
 | `burn_severity_summary.py` | Burn severity summary, a single file that also installs as a script. |
-| `fireanalysis/` | The pipeline package (plugin only): Earthdata login, STAC search, HLS, and the imagery algorithms. |
+| `fireanalysis/` | The pipeline package (plugin only): Earthdata login, STAC search, HLS, Planetary Computer, MTBS service, local scenes, and the algorithms. |
 | `plugin/` | Plugin wrapper: provider, entry point, `metadata.txt`, icon. |
 | `docs/DESIGN.md` | The pipeline plan, decisions and verified service details. |
 | `dev/build_plugin.py` | Builds `dist/qgis_burn_severity-<version>.zip`. |
 | `dev/smoke_test.py` | Runs every mode on `testdata/` and checks the counts, inside QGIS (Python Console) or headless. |
 | `dev/pipeline_test.py` | Tests the offline pipeline algorithms (Build dNBR) on `testdata/`. |
+| `dev/perimeter_study.py` | Scores the perimeter draft against MTBS perimeters (offline, on the validation outputs). |
 | `dev/online_test.py` | Runs the whole chain against the live HLS archive, from search to summary table (needs a network and the Earthdata login). |
 | `dev/run_headless.sh` | Runs a dev script with a QGIS app's bundled Python, for example `dev/run_headless.sh /Applications/QGIS.app` (smoke test) or `dev/run_headless.sh /Applications/QGIS.app online_test.py`. |
 | `dev/make_testdata.py` | Rebuilds `testdata/` from the full Lab 6 data. |

@@ -16,6 +16,12 @@ For each fire in FIRES:
 The comparison isolates imagery and calibration (HLS vs MTBS's Landsat or
 Sentinel-2 processing): thresholds and perimeter are MTBS's.
 
+With --pc the imagery comes from Planetary Computer (Landsat Collection 2
+Level-2 and Sentinel-2 L2A, the same satellite as MTBS's scene) instead of HLS;
+use it for fires before 2013 (HISTORICAL below).
+
+    dev/run_headless.sh /Applications/QGIS-final-4_2_3.app mtbs_validation.py --pc NM3581210654120110626
+
 Writes a JSON report next to the outputs and prints a summary.
 """
 from http.client import HTTPException
@@ -51,11 +57,12 @@ from fireanalysis.algorithms.build_dnbr import BuildDnbr  # noqa: E402
 from fireanalysis.algorithms.classify_severity import ClassifySeverity  # noqa: E402
 from fireanalysis.algorithms.fetch_hls_nbr import FetchHlsNbr  # noqa: E402
 from fireanalysis.algorithms.find_hls_scenes import FindHlsScenes  # noqa: E402
+from fireanalysis.algorithms.planetary_algorithms import FetchPlanetaryNbr, FindPlanetaryScenes  # noqa: E402
 
 gdal.UseExceptions()
 MAPSERVER = "https://apps.fs.usda.gov/arcx/rest/services/EDW/EDW_MTBS_01/MapServer"
 IMAGESERVER = "https://imagery.geoplatform.gov/iipp/rest/services/Fire_Aviation/USFS_EDW_MTBS_CONUS/ImageServer"
-BOUNDARY_LAYERS = {2022: 79, 2023: 80, 2024: 82}  # year -> Burned Area Boundaries layer id
+BOUNDARIES = MAPSERVER + "/63"  # Burned Area Boundaries (All Years)
 
 # (MTBS fire id, year)
 # Every MTBS fire over 15,000 ac in AZ, NM, CO and UT, 2022-2024, as published in 2026.
@@ -80,7 +87,17 @@ FIRES = [
     ("AZ3343911144120240910", 2024),  # Siphon: S2A -> S2A, low class only
     ("UT4046911107620240928", 2024),  # Yellow Lake: S2B -> S2A, extended
 ]
-OUT = tempfile.mkdtemp(prefix="fireanalysis_mtbs_")
+# Before HLS: run with --pc
+HISTORICAL = [
+    ("NM3590710632420000505", 2000),  # Cerro Grande: L7 -> L5, extended
+    ("AZ3662511217320060608", 2006),  # Warm: L5 -> L5, extended
+    ("AZ3532911160120100620", 2010),  # Schultz: L5 -> L5, extended
+    ("NM3581210654120110626", 2011),  # Las Conchas: L5 -> L7 (SLC-off), extended
+    ("NM3326710859220120509", 2012),  # Whitewater-Baldy: L5 -> L8, extended
+    ("AZ3423311046320020618", 2002),  # Rodeo: L7 -> L5, extended, 461,000 ac
+]
+PC = "--pc" in sys.argv
+OUT = tempfile.mkdtemp(prefix="fireanalysis_mtbs_" + ("pc_" if PC else ""))
 CLASSES = ["Unburned-low", "Low", "Moderate", "High", "Incr. greenness"]
 
 
@@ -95,6 +112,17 @@ def http(url, **params):
             last = e
             print(f"   (retrying {url.rsplit('/', 2)[-2]}: {e})")
     raise RuntimeError(f"{url} failed after retries: {last}")
+
+
+def pc_scene(mtbs_id):
+    """MTBS scene id -> (Planetary Computer source, platform, QDate). '503403520110624' is
+    Landsat 5 path 34 row 35; 'A12SVE20220601_30m' is Sentinel-2A."""
+    s = mtbs_id.split("_")[0]
+    d = s[-8:]
+    day = QDate(int(d[:4]), int(d[4:6]), int(d[6:]))
+    if s[0] in "AB":
+        return 1, f"sentinel-2{s[0].lower()}", day
+    return 0, f"landsat-{s[0]}", day
 
 
 def scene(mtbs_id):
@@ -140,7 +168,7 @@ def kappa(confusion):
 def validate(fire_id, year):
     folder = os.path.join(OUT, fire_id)
     os.makedirs(folder)
-    gj = json.loads(http(f"{MAPSERVER}/{BOUNDARY_LAYERS[year]}/query", where=f"fire_id='{fire_id}'",
+    gj = json.loads(http(f"{BOUNDARIES}/query", where=f"fire_id='{fire_id}'",
                          outFields="*", outSR=4326, f="geojson"))
     attrs = gj["features"][0]["properties"]
     perimeter = os.path.join(folder, "perimeter.geojson")
@@ -151,6 +179,20 @@ def validate(fire_id, year):
 
     nbr = {}
     for label, mtbs_scene in (("pre", attrs["pre_id"]), ("post", attrs["post_id"])):
+        if PC:
+            source, platform, day = pc_scene(mtbs_scene)
+            res, ctx, _ = run(FindPlanetaryScenes(), {"AOI": perimeter, "START": day, "END": day, "SOURCE": source,
+                                                      "OUTPUT": "TEMPORARY_OUTPUT"})
+            layer = QgsProcessingUtils.mapLayerFromString(res["OUTPUT"], ctx)
+            ids = [f["item"] for f in layer.getFeatures() if str(f["platform"]).lower() == platform]
+            if not ids:
+                raise RuntimeError(f"No Planetary Computer {platform} scene on {day.toString('yyyy-MM-dd')}")
+            res, _, log = run(FetchPlanetaryNbr(), {"AOI": perimeter, "ITEMS": " ".join(ids), "SOURCE": source,
+                                                    "NBR": os.path.join(folder, f"nbr_{label}.tif")})
+            nbr[label] = res["NBR"]
+            print(f"   {label}: Planetary Computer {platform} {day.toString('yyyy-MM-dd')} {', '.join(ids)}; "
+                  + "; ".join(m.strip() for m in log if m.strip().startswith(("NBR computed", "Cloud", "Water"))))
+            continue
         sensor, day = scene(mtbs_scene)
         res, ctx, _ = run(FindHlsScenes(), {"AOI": perimeter, "START": day, "END": day,
                                             "SENSORS": [["L30", "S30"].index(sensor)],
@@ -267,8 +309,9 @@ def validate(fire_id, year):
 
 print(f"Fire Analysis {VERSION} MTBS validation on QGIS {Qgis.QGIS_VERSION}; outputs in {OUT}")
 report = []
-ONLY = [a for a in sys.argv[1:] if a in {f for f, _ in FIRES}]  # optional: fire ids to run
-for fire_id, year in FIRES:
+ALL = FIRES + HISTORICAL
+ONLY = [a for a in sys.argv[1:] if a in {f for f, _ in ALL}]  # optional: fire ids to run
+for fire_id, year in (HISTORICAL if PC and not ONLY else ALL):
     if ONLY and fire_id not in ONLY:
         continue
     try:

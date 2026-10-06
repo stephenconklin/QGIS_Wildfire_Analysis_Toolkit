@@ -13,9 +13,11 @@ from .burn_severity_summary import BurnSeveritySummary
 from .fireanalysis import VERSION
 from .fireanalysis.algorithms.build_dnbr import BuildDnbr
 from .fireanalysis.algorithms.classify_severity import ClassifySeverity
+from .fireanalysis.algorithms.draft_perimeter import DraftPerimeter
 from .fireanalysis.algorithms.fetch_hls_nbr import FetchHlsNbr
 from .fireanalysis.algorithms.find_hls_scenes import FindHlsScenes
 from .fireanalysis.algorithms.hls_burn_severity import HlsBurnSeverity
+from .fireanalysis.algorithms.planetary_algorithms import FetchPlanetaryNbr, FindPlanetaryScenes
 from .fireanalysis.algorithms.prepare_local_nbr import PrepareLocalNbr
 from .fireanalysis.algorithms.suggest_hls_pairs import SuggestHlsPairs
 
@@ -47,5 +49,6 @@ class FireAnalysisProvider(QgsProcessingProvider):
 
     def loadAlgorithms(self):  # noqa: N802 (QGIS API name)
         for alg in (HlsBurnSeverity(), FindHlsScenes(), SuggestHlsPairs(), FetchHlsNbr(), PrepareLocalNbr(),
-                    BuildDnbr(), ClassifySeverity(), _PluginBurnSeveritySummary()):
+                    FindPlanetaryScenes(), FetchPlanetaryNbr(),
+                    BuildDnbr(), DraftPerimeter(), ClassifySeverity(), _PluginBurnSeveritySummary()):
             self.addAlgorithm(alg)

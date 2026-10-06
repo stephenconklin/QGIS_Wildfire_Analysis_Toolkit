@@ -106,10 +106,11 @@ fetching always mosaics.
 | 1 | Fetch HLS NBR | `fireanalysis:fetchhlsnbr` | done (2.0.0-dev) |
 | 2 | Build dNBR (align, offset, RdNBR, RBR) | `fireanalysis:builddnbr` | done (2.0.0-dev) |
 | 2 | Prepare local scene NBR (Landsat C2 L2, ARD, Sentinel-2 L2A) | `fireanalysis:preparelocalnbr` | done (2.0.0-dev) |
-| 3 | Planetary Computer and Earth Search providers | | |
+| 3 | Planetary Computer (Landsat C2 L2, Sentinel-2 L2A) | `fireanalysis:findplanetaryscenes`, `fireanalysis:fetchplanetarynbr` | done (2.0.0-dev) |
+| 3 | Earth Search provider | | not needed so far |
 | 4 | Scene pair suggestion (AOI-clear %, day-of-year match) | `fireanalysis:suggesthlspairs` | done (2.0.0-dev) |
 | 5 | Threshold estimates and `dnbr6` | `fireanalysis:classifyseverity` | done (2.0.0-dev) |
-| 5 | Perimeter draft | | |
+| 5 | Perimeter draft | `fireanalysis:draftperimeter` | done (2.0.0-dev) |
 | 6 | Whole pipeline in one step, with report | `fireanalysis:hlsburnseverity` | done (2.0.0-dev); layout PDF still to do |
 | 5 | Burn severity summary | `fireanalysis:burnseveritysummary` | done (1.1.0) |
 | 6 | Layout PDF (map, chart) | | |
@@ -225,3 +226,15 @@ default is the nearby-fires median: general, explainable, and it carries
 regional analyst practice. The plain RdNBR >= 750 match fails in the Southwest
 because sparse pre-fire vegetation inflates RdNBR (half of these fires' area
 reaches 750), which the FMT3 guide warns about for heterogeneous cover.
+
+**Historical fires** (Planetary Computer Landsat, `--pc`): Cerro Grande 2000
+0.670, Rodeo 2002 0.602, Warm 2006 0.721, Schultz 2010 0.735, Las Conchas 2011
+0.624, Whitewater-Baldy 2012 0.770 (mean 0.69, within one class >= 99.1 %).
+Cerro Pelado 2022 through Planetary Computer L8: 0.746 (HLS 0.723), dNBR r 0.991
+with HLS.
+
+**Perimeter draft** (`dev/perimeter_study.py`, 18 fires, IoU with the MTBS
+perimeter): dNBR >= 0.05, patches >= 20 ha: 0.69 unseeded, 0.73 seeded with a
+1 km circle at the MTBS location (min 0.005: the seed misses for Pass and
+Mitchell). Thresholds 0.075–0.15 do worse; patch size matters little.
+

@@ -18,7 +18,9 @@ Uses the test-data burned area (Dragon Bravo, clipped) as the AOI:
      the whole pipeline from search to summary table.
   5. Burn severity from HLS (the one-step pipeline) with the same granules:
      every output file, a 4-class summary and a report with the warnings.
-  6. If the Lab 6 raw data zip is present: Prepare local scene NBR on the same
+  6. Planetary Computer: the same Landsat 9 acquisition (2025-09-15) through
+     Find and Fetch Landsat / Sentinel-2 must match the HLS post-fire NBR.
+  7. If the Lab 6 raw data zip is present: Prepare local scene NBR on the same
      two acquisitions must match the HLS NBR on the same grid (r > 0.99).
 Prints PASS or FAIL per check, the offset and the summary table.
 """
@@ -48,6 +50,7 @@ from fireanalysis.algorithms.build_dnbr import BuildDnbr  # noqa: E402
 from fireanalysis.algorithms.fetch_hls_nbr import FetchHlsNbr  # noqa: E402
 from fireanalysis.algorithms.find_hls_scenes import FindHlsScenes  # noqa: E402
 from fireanalysis.algorithms.hls_burn_severity import HlsBurnSeverity  # noqa: E402
+from fireanalysis.algorithms.planetary_algorithms import FetchPlanetaryNbr, FindPlanetaryScenes  # noqa: E402
 from fireanalysis.algorithms.prepare_local_nbr import PrepareLocalNbr  # noqa: E402
 
 AOI = os.path.join(REPO, "testdata", "testdata.gpkg") + "|layername=burn_area"
@@ -236,6 +239,31 @@ if len(granule_ids) == 2:
               any("looks burned" in w for w in rep["warnings"]), str(rep["warnings"]))
         print("      thresholds: " + ", ".join(f"{k} {rep['thresholds'][k]:.3f}" for k in ("low", "moderate", "high"))
               + f"; cross-check {rep['thresholds'].get('alternative')}")
+
+# Planetary Computer: Landsat 9 on the post-fire date, against HLS L30 of the same acquisition
+if "post" in nbr:
+    res, ctx, log = _run(FindPlanetaryScenes(), {"AOI": AOI, "START": QDate(2025, 9, 15), "END": QDate(2025, 9, 15),
+                                                 "SOURCE": 0, "AOI_CLEAR": True, "OUTPUT": "TEMPORARY_OUTPUT"})
+    ids = []
+    if res is not None:
+        layer = QgsProcessingUtils.mapLayerFromString(res["OUTPUT"], ctx)
+        ids = [f["item"] for f in layer.getFeatures() if f["platform"] == "landsat-9"]
+        clear = [f["aoi_clear"] for f in layer.getFeatures() if f["platform"] == "landsat-9"]
+    check(f"Planetary Computer: Landsat 9 scenes found ({', '.join(ids)}), clear share {clear if ids else ''}",
+          bool(ids), " | ".join(log))
+    if ids:
+        res, _, log = _run(FetchPlanetaryNbr(), {"AOI": AOI, "ITEMS": " ".join(ids), "SOURCE": 0,
+                                                 "NBR": os.path.join(OUT, "pc_post.tif")})
+        if res is None:
+            check("Planetary Computer: fetch", False, " | ".join(log))
+        else:
+            x, y = gdal.Open(res["NBR"]), gdal.Open(nbr["post"])
+            same = x.GetGeoTransform() == y.GetGeoTransform() and x.RasterXSize == y.RasterXSize
+            a, b = x.ReadAsArray().astype(float), y.ReadAsArray().astype(float)
+            ok = (a != -9999) & (b != -9999)
+            r = np.corrcoef(a[ok], b[ok])[0, 1]
+            check(f"Planetary Computer NBR matches HLS on the same grid (r {r:.3f}, mean diff "
+                  f"{np.mean(a[ok] - b[ok]):+.3f})", same and r > 0.98, " | ".join(log))
 
 # Local scenes from the Lab 6 zip against HLS (same acquisitions, same grid)
 LAB_ZIP = ("/Users/stephenconklin/Library/CloudStorage/OneDrive-FortLewisCollege/GEOG-400-Raster-GIS/"

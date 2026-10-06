@@ -104,86 +104,104 @@ class PrepareLocalNbr(QgsProcessingAlgorithm):
                 feedback.pushInfo(f'  {key}: ' + ', '.join(f.rsplit("/", 1)[-1] for f in files))
 
         aoi = aoi_geometry(self.parameterAsSource(parameters, self.AOI, context), context)
-        pixel = self.parameterAsDouble(parameters, self.PIXEL, context)
-        crs, bounds, ncols, nrows = raster.analysis_grid(
-            aoi, self.parameterAsCrs(parameters, self.CRS, context),
-            self.parameterAsDouble(parameters, self.BUFFER, context), pixel, context.transformContext())
-        wkt = raster.crs_wkt(crs)
-        feedback.pushInfo(f'Grid {ncols} x {nrows} px at {pixel:.0f} m in {crs.authid() or crs.description()}')
-
-        def warp(files, resample, out_type):
-            src = gdal.Open(files[0])
-            src_px = abs(src.GetGeoTransform()[1])
-            same_crs = QgsCoordinateReferenceSystem.fromWkt(src.GetProjection()) == crs
-            if resample == 'auto':
-                aligned = same_crs and abs(src_px - pixel) < 1e-6 and \
-                    all(abs((v - src.GetGeoTransform()[i]) / pixel - round((v - src.GetGeoTransform()[i]) / pixel)) < 1e-6
-                        for i, v in ((0, bounds[0]), (3, bounds[3])))
-                resample = 'near' if aligned else ('average' if src_px < pixel * 0.9 else 'bilinear')
-            ds = gdal.Warp('', files, format='MEM', outputBounds=bounds, width=ncols, height=nrows,
-                           dstSRS=wkt, resampleAlg=resample, srcNodata=0, dstNodata=0, outputType=out_type,
-                           multithread=True,
-                           callback=lambda *_: 0 if feedback.isCanceled() else 1)
-            if ds is None:
-                raise QgsProcessingException(f'Could not read {files[0]}.')
-            return ds, resample
-
-        refl, like, used = {}, None, set()
-        keys = ['nir', 'swir2'] + (['red'] if parameters.get(self.REFLECTANCE) not in (None, '') else [])
-        for i, key in enumerate(keys):
-            if not scene.bands.get(key):
-                raise QgsProcessingException(f'No {key} band in the scene folder.')
-            ds, how = warp(scene.bands[key], 'auto', gdal.GDT_Float32)
-            if feedback.isCanceled():
-                return {}
-            used.add(how)
-            refl[key] = scene.reflectance(key, ds.GetRasterBand(1).ReadAsArray())
-            like = like or ds
-            feedback.setProgress(70 * (i + 1) / (len(keys) + 1))
-        feedback.pushInfo(f'Resampling: {", ".join(sorted(used))}')
-
         mask_keys = {MASK_CLASSES[i][0] for i in self.parameterAsEnums(parameters, self.MASK, context)}
-        has_data = np.isfinite(refl['nir']) & np.isfinite(refl['swir2'])
-        masked = np.zeros(has_data.shape, bool)
-        if scene.qa:
-            qa_ds, _ = warp(scene.qa, 'near', gdal.GDT_UInt16)
-            qa = qa_ds.GetRasterBand(1).ReadAsArray()
-            masked, fill = scene.qa_mask(qa, mask_keys)
-            has_data &= ~fill
-            n = max(int(has_data.sum()), 1)
-            for key, label, _ in MASK_CLASSES:
-                share = 100.0 * int((scene.qa_mask(qa, {key})[0] & has_data).sum()) / n
-                if share >= 0.05:
-                    feedback.pushInfo(f'  {label}: {share:.1f} %' + ('' if key in mask_keys else ' (not masked)'))
-        else:
-            warn(feedback, 'No QA_PIXEL (Landsat) or SCL (Sentinel-2) file: clouds, shadow, snow and '
-                           'water are not masked.')
-        nir, swir2 = refl['nir'], refl['swir2']
-        good = has_data & ~masked & (nir > 0) & (swir2 > 0)
-        nbr = np.full(nir.shape, np.nan, np.float32)
-        nbr[good] = (nir[good] - swir2[good]) / (nir[good] + swir2[good])
-        feedback.pushInfo(f'NBR computed for {100.0 * good.mean():.1f} % of the grid'
-                          + (f'; range {nbr[good].min():.3f} to {nbr[good].max():.3f}, mean {nbr[good].mean():.3f}'
-                             if good.any() else ''))
-        if not good.any():
-            warn(feedback, 'NBR is empty: the scene does not cover the area, or every pixel is masked.')
-        elif has_data.mean() < 0.99:
-            warn(feedback, f'{100.0 * (1 - has_data.mean()):.1f} % of the grid has no data from this scene.')
-
-        metadata = {'FIREANALYSIS_VERSION': VERSION, 'SOURCE_SENSOR': scene.sensor,
-                    'SOURCE_DATE': scene.date.isoformat(), 'CALIBRATION': scene.label,
-                    'SOURCE_FILES': ' '.join(f.rsplit('/', 1)[-1] for k in ('nir', 'swir2') for f in scene.bands[k]),
-                    'MASKED': ' '.join(sorted(mask_keys)) if scene.qa else 'none (no QA file)'}
-        out = self.parameterAsOutputLayer(parameters, self.NBR, context)
-        raster.write(out, [('NBR', nbr)], like, gdal.GDT_Float32, raster.NODATA, metadata)
-        results = {self.NBR: out}
-        if 'red' in refl:
-            out = self.parameterAsOutputLayer(parameters, self.REFLECTANCE, context)
-            raster.write(out, [('swir2', refl['swir2']), ('nir', refl['nir']), ('red', refl['red'])],
-                         like, gdal.GDT_Float32, raster.NODATA, metadata)
-            results[self.REFLECTANCE] = out
+        refl_out = (self.parameterAsOutputLayer(parameters, self.REFLECTANCE, context)
+                    if parameters.get(self.REFLECTANCE) not in (None, '') else None)
+        out = write_scene_nbr(scene, aoi, self.parameterAsCrs(parameters, self.CRS, context),
+                              self.parameterAsDouble(parameters, self.BUFFER, context),
+                              self.parameterAsDouble(parameters, self.PIXEL, context), mask_keys,
+                              self.parameterAsOutputLayer(parameters, self.NBR, context), refl_out, context, feedback)
+        if out is None:
+            return {}
+        results = {self.NBR: out['nbr']}
+        if 'reflectance' in out:
+            results[self.REFLECTANCE] = out['reflectance']
         feedback.setProgress(100)
         return results
+
+
+def write_scene_nbr(scene, aoi, crs, buffer_m, pixel, mask_keys, nbr_out, refl_out, context, feedback,
+                    extra_metadata=None):
+    """Calibrate, mask and write NBR (and optionally the SWIR2/NIR/red reflectance) for a
+    local.Scene, on the analysis grid of aoi (EPSG:4326). Band entries may be file paths
+    or /vsicurl/ URLs. Returns {'nbr': path[, 'reflectance': path]}, or None if cancelled."""
+    import numpy as np
+    from osgeo import gdal
+    gdal.UseExceptions()
+    crs, bounds, ncols, nrows = raster.analysis_grid(aoi, crs, buffer_m, pixel, context.transformContext())
+    wkt = raster.crs_wkt(crs)
+    feedback.pushInfo(f'Grid {ncols} x {nrows} px at {pixel:.0f} m in {crs.authid() or crs.description()}')
+
+    def warp(files, resample, out_type):
+        src = gdal.Open(files[0])
+        src_px = abs(src.GetGeoTransform()[1])
+        same_crs = QgsCoordinateReferenceSystem.fromWkt(src.GetProjection()) == crs
+        if resample == 'auto':
+            aligned = same_crs and abs(src_px - pixel) < 1e-6 and \
+                all(abs((v - src.GetGeoTransform()[i]) / pixel - round((v - src.GetGeoTransform()[i]) / pixel)) < 1e-6
+                    for i, v in ((0, bounds[0]), (3, bounds[3])))
+            resample = 'near' if aligned else ('average' if src_px < pixel * 0.9 else 'bilinear')
+        ds = gdal.Warp('', files, format='MEM', outputBounds=bounds, width=ncols, height=nrows,
+                       dstSRS=wkt, resampleAlg=resample, srcNodata=0, dstNodata=0, outputType=out_type,
+                       multithread=True,
+                       callback=lambda *_: 0 if feedback.isCanceled() else 1)
+        if ds is None:
+            raise QgsProcessingException(f'Could not read {files[0]}.')
+        return ds, resample
+
+    refl, like, used = {}, None, set()
+    keys = ['nir', 'swir2'] + (['red'] if refl_out else [])
+    for i, key in enumerate(keys):
+        if not scene.bands.get(key):
+            raise QgsProcessingException(f'No {key} band in the scene.')
+        ds, how = warp(scene.bands[key], 'auto', gdal.GDT_Float32)
+        if feedback.isCanceled():
+            return None
+        used.add(how)
+        refl[key] = scene.reflectance(key, ds.GetRasterBand(1).ReadAsArray())
+        like = like or ds
+        feedback.setProgress(70 * (i + 1) / (len(keys) + 1))
+    feedback.pushInfo(f'Resampling: {", ".join(sorted(used))}')
+
+    has_data = np.isfinite(refl['nir']) & np.isfinite(refl['swir2'])
+    masked = np.zeros(has_data.shape, bool)
+    if scene.qa:
+        qa_ds, _ = warp(scene.qa, 'near', gdal.GDT_UInt16)
+        qa = qa_ds.GetRasterBand(1).ReadAsArray()
+        masked, fill = scene.qa_mask(qa, mask_keys)
+        has_data &= ~fill
+        n = max(int(has_data.sum()), 1)
+        for key, label, _ in MASK_CLASSES:
+            share = 100.0 * int((scene.qa_mask(qa, {key})[0] & has_data).sum()) / n
+            if share >= 0.05:
+                feedback.pushInfo(f'  {label}: {share:.1f} %' + ('' if key in mask_keys else ' (not masked)'))
+    else:
+        warn(feedback, 'No QA_PIXEL (Landsat) or SCL (Sentinel-2) band: clouds, shadow, snow and '
+                       'water are not masked.')
+    nir, swir2 = refl['nir'], refl['swir2']
+    good = has_data & ~masked & (nir > 0) & (swir2 > 0)
+    nbr = np.full(nir.shape, np.nan, np.float32)
+    nbr[good] = (nir[good] - swir2[good]) / (nir[good] + swir2[good])
+    feedback.pushInfo(f'NBR computed for {100.0 * good.mean():.1f} % of the grid'
+                      + (f'; range {nbr[good].min():.3f} to {nbr[good].max():.3f}, mean {nbr[good].mean():.3f}'
+                         if good.any() else ''))
+    if not good.any():
+        warn(feedback, 'NBR is empty: the scene does not cover the area, or every pixel is masked.')
+    elif has_data.mean() < 0.99:
+        warn(feedback, f'{100.0 * (1 - has_data.mean()):.1f} % of the grid has no data from this scene.')
+
+    metadata = {'FIREANALYSIS_VERSION': VERSION, 'SOURCE_SENSOR': scene.sensor,
+                'SOURCE_DATE': scene.date.isoformat(), 'CALIBRATION': scene.label,
+                'SOURCE_FILES': ' '.join(f.rsplit('/', 1)[-1].split('?')[0] for k in ('nir', 'swir2') for f in scene.bands[k]),
+                'MASKED': ' '.join(sorted(mask_keys)) if scene.qa else 'none (no QA band)'}
+    metadata.update(extra_metadata or {})
+    raster.write(nbr_out, [('NBR', nbr)], like, gdal.GDT_Float32, raster.NODATA, metadata)
+    results = {'nbr': nbr_out}
+    if 'red' in refl:
+        raster.write(refl_out, [('swir2', refl['swir2']), ('nir', refl['nir']), ('red', refl['red'])],
+                     like, gdal.GDT_Float32, raster.NODATA, metadata)
+        results['reflectance'] = refl_out
+    return results
 
 
 def _folder_behavior():

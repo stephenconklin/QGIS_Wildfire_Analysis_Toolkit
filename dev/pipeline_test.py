@@ -1,7 +1,7 @@
 """
 Offline test for the fireanalysis algorithms that need no network: Prepare
-local scene NBR (on synthetic Landsat and Sentinel-2 products), Build dNBR and
-Classify severity. The online HLS test is dev/online_test.py.
+local scene NBR (on synthetic Landsat and Sentinel-2 products), Build dNBR,
+Classify severity and Draft burned-area perimeter. The online HLS test is dev/online_test.py.
 
 Inside QGIS (Python Console):
     exec(open('/path/to/QGIS_Burn_Severity/dev/pipeline_test.py').read())
@@ -26,8 +26,8 @@ except NameError:  # exec() from the console has no __file__
     REPO = "/Users/stephenconklin/Documents/ConklinGeospatial/Projects/GITHub/QGIS_Burn_Severity"
 sys.path.insert(0, REPO)
 
-from qgis.core import (Qgis, QgsApplication, QgsProcessingContext,  # noqa: E402
-                       QgsProcessingFeedback, QgsProject)
+from qgis.core import (Qgis, QgsApplication, QgsGeometry, QgsProcessingContext,  # noqa: E402
+                       QgsProcessingFeedback, QgsProject, QgsVectorLayer)
 
 _app = None
 if QgsApplication.instance() is None:  # headless: start QGIS and Processing
@@ -43,6 +43,7 @@ from fireanalysis import VERSION  # noqa: E402
 from fireanalysis.algorithms.build_dnbr import BuildDnbr  # noqa: E402
 from fireanalysis.algorithms.classify_severity import ClassifySeverity, match_threshold  # noqa: E402
 from fireanalysis.algorithms.prepare_local_nbr import PrepareLocalNbr  # noqa: E402
+from fireanalysis.algorithms.draft_perimeter import DraftPerimeter, burned_mask  # noqa: E402
 
 gdal.UseExceptions()
 T = os.path.join(REPO, "testdata") + os.sep
@@ -358,6 +359,33 @@ shutil.copytree(S2, os.path.join(MIXED, "s2"))
 a, log = run_local(MIXED)
 check("local: a folder with Landsat and Sentinel-2 is refused", a is None and any("both Landsat" in m for m in log),
       " | ".join(log))
+
+
+# 9. Draft burned-area perimeter
+m = np.zeros((60, 60))
+m[10:40, 10:40] = 0.5   # a 900-pixel burn
+m[20:23, 20:23] = 0.0   # a 9-pixel unburned hole inside it
+m[50:52, 50:52] = 0.5   # a 4-pixel speck
+got = burned_mask(m, 0.1, 10, 20)
+check("perimeter mask: speck removed, hole filled, burn kept",
+      not got[50:52, 50:52].any() and got[20:23, 20:23].all() and got[10:40, 10:40].all())
+res, log = _run(DraftPerimeter(), {"DNBR": T + "dnbr.tif", "OUTPUT": "TEMPORARY_OUTPUT"})
+check("draft perimeter: runs", res is not None, " | ".join(log))
+if res is not None:
+    from qgis.core import QgsProcessingUtils  # noqa: E402
+    ctx = QgsProcessingContext()  # kept, so the temporary output layer stays alive
+    alg = DraftPerimeter()
+    alg.initAlgorithm()
+    p = {d.name(): d.defaultValue() for d in alg.parameterDefinitions()}
+    p.update({"DNBR": T + "dnbr.tif", "SEED": BURN, "OUTPUT": "TEMPORARY_OUTPUT"})
+    fb = _Feedback()
+    res, ok = alg.create().run(p, ctx, fb)
+    layer = QgsProcessingUtils.mapLayerFromString(res["OUTPUT"], ctx)
+    draft = next(layer.getFeatures()).geometry()
+    truth = QgsGeometry.unaryUnion([f.geometry() for f in QgsVectorLayer(BURN, "b", "ogr").getFeatures()])
+    iou = draft.intersection(truth).area() / draft.combine(truth).area()
+    check(f"draft perimeter seeded with the test burned area overlaps it (IoU {iou:.2f})", iou > 0.5,
+          " | ".join(fb.log))
 
 print(f"\n{'ALL PASSED' if not failed else f'{failed} FAILED'}")
 if _app is not None:
