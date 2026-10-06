@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# GIS data stays out of the repo
+*.tif
+*.tif.aux.xml
+*.ovr
+*.gpkg
+*.gpkg-shm
+*.gpkg-wal
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.qgz~
