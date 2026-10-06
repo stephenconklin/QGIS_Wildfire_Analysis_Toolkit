@@ -1,8 +1,9 @@
 __pycache__/
 *.pyc
 .DS_Store
+dist/
 
-# GIS data stays out of the repo
+# GIS data stays out of the repo, except the small test set in testdata/
 *.tif
 *.tif.aux.xml
 *.ovr
@@ -15,3 +16,5 @@ __pycache__/
 *.prj
 *.cpg
 *.qgz~
+!testdata/*.tif
+!testdata/*.gpkg
