@@ -45,6 +45,25 @@ Version 2.0 grows the plugin into a fire analysis pipeline modeled on the MTBS [
 
 Checked against 17 published MTBS fires: the imagery and calibration reproduce MTBS's classes (mean kappa 0.78); threshold estimates are a starting point (see *Validation against MTBS* below).
 
+### One step: Burn severity from HLS
+
+**Burn severity from HLS (whole pipeline)** (`fireanalysis:hlsburnseverity`, under **Fire Analysis › Pipeline**) runs everything below from a fire's burned-area polygons and dates, and writes the results to one folder.
+
+| Parameter | Description |
+|---|---|
+| Burned-area polygons | The fire. Also the area of interest for the imagery. |
+| Fire name | Zone name in the summary and the report. |
+| Fire start, Fire end | Ignition and containment dates, for choosing the image pair. |
+| Assessment | Initial (soon after the fire) or extended (next growing season). |
+| Sub-area polygons, name field, name | Optional zones for the summary, as in *Burn severity summary*. |
+| Estimate empty thresholds from; Low, Moderate, High threshold | As in *Classify severity*. |
+| Pre-fire, Post-fire granule ids (Advanced) | Skip the pair search and use these. |
+| Output folder | Where everything goes. |
+
+Steps: *Suggest HLS image pairs* (rank 1; all candidates in `image_pairs.csv`), *Fetch HLS NBR* for both dates, *Build dNBR* (ring offset), *Classify severity*, *Burn severity summary* with the classification's thresholds. The folder holds `nbr_pre.tif`, `nbr_post.tif`, `reflectance_post.tif` (SWIR2/NIR/red, for checking the classes), `dnbr.tif`, `rdnbr.tif`, `rbr.tif`, `dnbr6.tif` with its MTBS style, `summary.gpkg` and `summary.csv`, zones and histogram, and `report.html` and `report.json`: scenes, calibration, offset, thresholds and how they were chosen, the other estimate method's thresholds as a cross-check, every warning, and the summary. When the two threshold estimates disagree on the high threshold by more than 0.1, the report says so. The dNBR and the classes load into the project when it finishes.
+
+With the granule ids given it takes under a minute for the Dragon Bravo test area; the pair search adds several minutes.
+
 ### Imagery
 
 **Find HLS scenes** (`fireanalysis:findhlsscenes`) searches HLS L30 (Landsat 8/9) and S30 (Sentinel-2) granules over an area of interest and date range. It needs no login.

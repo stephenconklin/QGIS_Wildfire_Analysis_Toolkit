@@ -16,7 +16,9 @@ Uses the test-data burned area (Dragon Bravo, clipped) as the AOI:
   3. A missing netrc file stops the fetch with a clear message.
   4. Build dNBR with the ring offset, then Burn severity summary on the result:
      the whole pipeline from search to summary table.
-  5. If the Lab 6 raw data zip is present: Prepare local scene NBR on the same
+  5. Burn severity from HLS (the one-step pipeline) with the same granules:
+     every output file, a 4-class summary and a report with the warnings.
+  6. If the Lab 6 raw data zip is present: Prepare local scene NBR on the same
      two acquisitions must match the HLS NBR on the same grid (r > 0.99).
 Prints PASS or FAIL per check, the offset and the summary table.
 """
@@ -45,6 +47,7 @@ from fireanalysis import VERSION  # noqa: E402
 from fireanalysis.algorithms.build_dnbr import BuildDnbr  # noqa: E402
 from fireanalysis.algorithms.fetch_hls_nbr import FetchHlsNbr  # noqa: E402
 from fireanalysis.algorithms.find_hls_scenes import FindHlsScenes  # noqa: E402
+from fireanalysis.algorithms.hls_burn_severity import HlsBurnSeverity  # noqa: E402
 from fireanalysis.algorithms.prepare_local_nbr import PrepareLocalNbr  # noqa: E402
 
 AOI = os.path.join(REPO, "testdata", "testdata.gpkg") + "|layername=burn_area"
@@ -93,6 +96,7 @@ def check(name, ok, detail=""):
 print(f"Fire Analysis {VERSION} online test on QGIS {Qgis.QGIS_VERSION}; outputs in {OUT}")
 nbr = {}
 found = {}
+granule_ids = {}
 for label, sensor, day in DATES:
     res, context, log = _run(FindHlsScenes(), {
         "AOI": AOI, "START": day, "END": day, "SENSORS": [["L30", "S30"].index(sensor)],
@@ -102,6 +106,7 @@ for label, sensor, day in DATES:
         continue
     scenes = QgsProcessingUtils.mapLayerFromString(res["OUTPUT"], context)
     found[label] = scenes
+    granule_ids[label] = " ".join(f["granule"] for f in scenes.getFeatures())  # the layer dies with its context
     tiles = sorted(f["tile"] for f in scenes.getFeatures())
     check(f"find {sensor} {day.toString('yyyy-MM-dd')}: tiles {tiles}",
           scenes.featureCount() > 0 and "12SUF" in tiles)
@@ -207,6 +212,29 @@ if len(nbr) == 2:
             for f in table.getFeatures():
                 print(f"      {f['sev_class']:15s}  {f['pct_db']:14.2f}   {f['pct_ba']:14.2f}   "
                       f"{f['ac_db']:15,.0f}   {f['ac_ba']:15,.0f}")
+
+# The one-step pipeline with the granules found above (no pair search, to stay fast)
+if len(granule_ids) == 2:
+    import json
+    folder = os.path.join(OUT, "pipeline")
+    res, _, log = _run(HlsBurnSeverity(), {
+        "PERIMETER": AOI, "FIRE_NAME": "Dragon Bravo", "FIRE_START": QDate(2025, 7, 4), "FIRE_END": QDate(2025, 9, 1),
+        "SUBAREAS": os.path.join(REPO, "testdata", "testdata.gpkg") + "|layername=watershed", "SUBAREA_NAME": "Bright Angel",
+        "PRE_GRANULES": granule_ids["pre"], "POST_GRANULES": granule_ids["post"],
+        "OUTPUT_FOLDER": folder})
+    check("pipeline: runs", res is not None, " | ".join(log[-5:]))
+    if res is not None:
+        want = {"nbr_pre.tif", "nbr_post.tif", "reflectance_post.tif", "dnbr.tif", "rdnbr.tif", "dnbr6.tif",
+                "dnbr6.qml", "summary.csv", "summary.gpkg", "report.html", "report.json"}
+        missing = want - set(os.listdir(folder))
+        check("pipeline: every output file", not missing, f"missing {sorted(missing)}")
+        rep = json.load(open(os.path.join(folder, "report.json")))
+        check("pipeline: 4-class summary for both zones", len(rep["summary"]) == 4 and "pct_ba" in rep["summary"][0],
+              str(rep["summary"])[:300])
+        check("pipeline: report lists the clipped-perimeter warning",
+              any("looks burned" in w for w in rep["warnings"]), str(rep["warnings"]))
+        print("      thresholds: " + ", ".join(f"{k} {rep['thresholds'][k]:.3f}" for k in ("low", "moderate", "high"))
+              + f"; cross-check {rep['thresholds'].get('alternative')}")
 
 # Local scenes from the Lab 6 zip against HLS (same acquisitions, same grid)
 LAB_ZIP = ("/Users/stephenconklin/Library/CloudStorage/OneDrive-FortLewisCollege/GEOG-400-Raster-GIS/"

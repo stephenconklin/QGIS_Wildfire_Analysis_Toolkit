@@ -110,8 +110,9 @@ fetching always mosaics.
 | 4 | Scene pair suggestion (AOI-clear %, day-of-year match) | `fireanalysis:suggesthlspairs` | done (2.0.0-dev) |
 | 5 | Threshold estimates and `dnbr6` | `fireanalysis:classifyseverity` | done (2.0.0-dev) |
 | 5 | Perimeter draft | | |
+| 6 | Whole pipeline in one step, with report | `fireanalysis:hlsburnseverity` | done (2.0.0-dev); layout PDF still to do |
 | 5 | Burn severity summary | `fireanalysis:burnseveritysummary` | done (1.1.0) |
-| 6 | Package and report (metadata JSON, QML, layout PDF) | | |
+| 6 | Layout PDF (map, chart) | | |
 
 **Find HLS scenes.** Inputs: AOI polygons, start and end dates, sensors
 (L30, S30), maximum scene cloud cover. Output: footprint polygons (EPSG:4326),
