@@ -35,6 +35,50 @@ Try it on the bundled [test data](testdata/README.md):
 
 Leave everything else at the defaults and click **Run**. The Bright Angel row of the zonal histogram should read 3,997 / 78,398 / 57,213 / 16,001 / 9 pixels.
 
+## Imagery from NASA HLS (plugin only, in development)
+
+Version 2.0 grows the plugin into a fire analysis pipeline (plan: [docs/DESIGN.md](docs/DESIGN.md)). Two algorithms under **Fire Analysis › Imagery** fetch analysis-ready NBR from NASA's [Harmonized Landsat Sentinel-2](https://hls.gsfc.nasa.gov/) (HLS v2.0) archive, so you don't download, calibrate or reproject scenes by hand.
+
+**Find HLS scenes** (`fireanalysis:findhlsscenes`) searches HLS L30 (Landsat 8/9) and S30 (Sentinel-2) granules over an area of interest and date range. It needs no login.
+
+| Parameter | Description |
+|---|---|
+| Area of interest | Polygons, any CRS. |
+| Start date, End date | Search window (UTC days). HLS starts in April 2013. |
+| Sensors | L30, S30, or both. |
+| Maximum scene cloud cover (%) | Drops granules above this tile-wide cloud cover. |
+
+Output: one footprint per granule with `granule`, `sensor`, `tile`, `date`, `doy`, `cloud` (scene %) and `aoi_pct` (share of the AOI inside the footprint).
+
+**Fetch HLS NBR** (`fireanalysis:fetchhlsnbr`) reads only the AOI window of the chosen granules, mosaics their tiles, masks clouds and writes NBR.
+
+| Parameter | Description |
+|---|---|
+| Area of interest | The same polygons. |
+| HLS scenes | Output of *Find HLS scenes*, or a selection from it: all of one date and one sensor. Select every tile of that date that the AOI touches. |
+| Buffer around the AOI (m) | Default 3,000, the margin MTBS uses to estimate the unburned dNBR offset. |
+| Target CRS | Empty means the UTM zone of the AOI. |
+| Fmask classes to mask | Default cloud, adjacent to cloud, cloud shadow, snow/ice and water. Cirrus and high aerosol (often smoke) are optional. |
+| netrc file (Advanced) | Empty means `~/.netrc`. |
+
+| Output | Description |
+|---|---|
+| NBR | Float32, raw units (−1 to 1), nodata −9999, 30 m. Metadata lists the granules and mask. |
+| Reflectance (optional) | SWIR2 / NIR / red reflectance, for a false-color view of the burn. |
+| Fmask (optional) | The Fmask window, unchanged. |
+
+The grid is snapped to whole 30 m pixels in the target CRS, so a pre-fire and a post-fire run with the same AOI and CRS line up exactly. dNBR is pre-fire NBR minus post-fire NBR (for now, use the Raster Calculator), and it feeds *Burn severity summary* directly.
+
+**Earthdata login.** Reading HLS needs a free [NASA Earthdata](https://urs.earthdata.nasa.gov) account in `~/.netrc`, readable only by you (`chmod 600 ~/.netrc`):
+
+```
+machine urs.earthdata.nasa.gov login YOUR_USER password YOUR_PASSWORD
+```
+
+GDAL sends the login only to `urs.earthdata.nasa.gov` and keeps the session cookie in a private temporary folder. A plugin setting for credentials may replace the netrc later.
+
+Fmask sometimes marks fresh burn scars as cloud shadow or water. The log reports how much of the area each class removed. If that share is large inside the fire, rerun without that class.
+
 ## Inputs
 
 | Parameter | Description |
@@ -143,6 +187,8 @@ dNBR from 30 m imagery, NAD83 / UTM 12N (EPSG:26912), USGS thresholds.
 
 Totals from pixel counts are slightly below the polygon areas because of the pixel-center rule.
 
+**This example's dNBR is miscalibrated.** It was later traced to two input errors: pre-fire Sentinel-2 NBR computed without the −1000 `BOA_ADD_OFFSET`, and post-fire Landsat 9 NBR computed from unscaled digital numbers. Rebuilt correctly from the same scenes, or fetched from HLS with the algorithms above, Dragon Bravo's burned area is about 2 / 17 / 26 / 28 / 27 % Unburned / Low / Moderate-low / Moderate-high / High instead of 0.01 % High. The table stays as the tool's test reference for the Lab 6 raster.
+
 ## Charting the results in a layout
 
 The summary table plugs straight into a QGIS layout chart item (*Add Item › Add Chart*):
@@ -169,18 +215,22 @@ Plotting percent puts zones of different sizes on the same scale. Use the `ac_` 
 ## Limitations
 
 - **Generic thresholds.** None of the preset thresholds were calibrated for a particular fire. Field-validated products such as BAER Soil Burn Severity maps use fire-specific thresholds. Use custom thresholds when you have calibrated ones.
-- **Sensor consistency.** Pre- and post-fire images from different sensors (for example Sentinel-2 and Landsat) can shift NBR values and with them every index.
+- **Calibration.** The tool trusts that its input dNBR was made from surface reflectance. Sentinel-2 L2A (processing baseline 04.00 and later, from January 2022) needs the −1000 offset before dividing by 10,000, and Landsat Collection 2 Level-2 needs DN × 0.0000275 − 0.2. Skipping either one changes every class. HLS input avoids both problems.
+- **Sensor consistency.** Pre- and post-fire images from different sensors (for example Sentinel-2 and Landsat) can shift NBR values and with them every index. HLS harmonizes the two.
 - **Pixel-center rule.** Zonal Histogram counts a pixel in a zone only if its center is inside, so small or narrow zones are approximated.
 
 ## Development
 
 | Path | Purpose |
 |---|---|
-| `burn_severity_summary.py` | The tool, a single file. |
+| `burn_severity_summary.py` | Burn severity summary, a single file that also installs as a script. |
+| `fireanalysis/` | The pipeline package (plugin only): Earthdata login, STAC search, HLS, and the imagery algorithms. |
 | `plugin/` | Plugin wrapper: provider, entry point, `metadata.txt`, icon. |
+| `docs/DESIGN.md` | The pipeline plan, decisions and verified service details. |
 | `dev/build_plugin.py` | Builds `dist/qgis_burn_severity-<version>.zip`. |
 | `dev/smoke_test.py` | Runs every mode on `testdata/` and checks the counts, inside QGIS (Python Console) or headless. |
-| `dev/run_headless.sh` | Runs the smoke test with a QGIS app's bundled Python, for example `dev/run_headless.sh /Applications/QGIS.app`. |
+| `dev/online_test.py` | Tests the HLS algorithms against the live archive (needs a network and the Earthdata login). |
+| `dev/run_headless.sh` | Runs a dev script with a QGIS app's bundled Python, for example `dev/run_headless.sh /Applications/QGIS.app` (smoke test) or `dev/run_headless.sh /Applications/QGIS.app online_test.py`. |
 | `dev/make_testdata.py` | Rebuilds `testdata/` from the full Lab 6 data. |
 
 Version history is in [CHANGELOG.md](CHANGELOG.md).

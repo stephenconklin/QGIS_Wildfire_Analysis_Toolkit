@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.0.0 — unreleased
+
+The plugin becomes a fire analysis pipeline (plan in `docs/DESIGN.md`). The standalone script, Burn severity summary 1.1.0, is unchanged.
+
+- **Find HLS scenes** (`fireanalysis:findhlsscenes`, plugin only). Searches NASA's HLS v2.0 archive (Landsat 8/9 L30 and Sentinel-2 S30) over an area of interest and date range, and returns one footprint per granule with its tile, date, scene cloud cover and the share of the AOI it covers. No login needed.
+- **Fetch HLS NBR** (`fireanalysis:fetchhlsnbr`, plugin only). Reads only the AOI window (plus a 3 km buffer) of the chosen granules from NASA Earthdata, mosaics the tiles on a 30 m grid snapped to whole pixels, masks the chosen Fmask classes, and writes NBR in raw units, plus an optional SWIR2/NIR/red reflectance stack and the Fmask window. The same AOI and CRS always give the same grid, so pre- and post-fire NBR line up. The Earthdata login is read from `~/.netrc`.
+- In the plugin, Burn severity summary moves to a **Severity** group; its id and parameters are unchanged.
+- Checked against Lab 6: HLS gives a dNBR inside the burned area that matches a correctly calibrated rebuild from the lab's own Sentinel-2 and Landsat 9 files. The lab's `dNBR.tif` turns out to combine Sentinel-2 NBR without the −1000 `BOA_ADD_OFFSET` and Landsat 9 NBR from unscaled DN, which is why it shows almost no High severity.
+- `dev/online_test.py` tests the HLS algorithms against the live archive. `dev/run_headless.sh` takes the script to run as an optional second argument.
+
 ## 1.1.0 — 2026-10-06
 
 - **RdNBR and RBR.** A new *Severity index and thresholds* option adds RdNBR (Miller & Thode 2007) and RBR (Parks et al. 2014), computed from the dNBR and a new optional *Pre-fire NBR raster*, each with its published four-class thresholds. The pre-fire NBR is resampled to the dNBR grid. dNBR with the USGS thresholds stays the default.

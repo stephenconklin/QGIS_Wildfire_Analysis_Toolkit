@@ -1,21 +1,27 @@
-"""Fire Analysis Processing provider. The algorithm is the same file that is
-installed as a standalone script (burn_severity_summary.py, copied in by
-dev/build_plugin.py); here its id is fireanalysis:burnseveritysummary."""
+"""Fire Analysis Processing provider.
+
+Burn severity summary is the same file that is installed as a standalone
+script (burn_severity_summary.py, copied in by dev/build_plugin.py); here its id
+is fireanalysis:burnseveritysummary. The imagery algorithms come from the
+fireanalysis package."""
 import os
 
 from qgis.core import QgsProcessingProvider
 from qgis.PyQt.QtGui import QIcon
 
-from .burn_severity_summary import VERSION, BurnSeveritySummary
+from .burn_severity_summary import BurnSeveritySummary
+from .fireanalysis import VERSION
+from .fireanalysis.algorithms.fetch_hls_nbr import FetchHlsNbr
+from .fireanalysis.algorithms.find_hls_scenes import FindHlsScenes
 
 
 class _PluginBurnSeveritySummary(BurnSeveritySummary):
-    # The provider is already called "Fire Analysis"; no group inside it.
+    # The script's group is "Fire Analysis", which is the provider's name here.
     def group(self):
-        return ''
+        return 'Severity'
 
     def groupId(self):
-        return ''
+        return 'severity'
 
 
 class FireAnalysisProvider(QgsProcessingProvider):
@@ -26,7 +32,7 @@ class FireAnalysisProvider(QgsProcessingProvider):
         return 'Fire Analysis'
 
     def longName(self):
-        return f'Fire Analysis (Burn Severity Summary {VERSION})'
+        return f'Fire Analysis {VERSION}'
 
     def versionInfo(self):
         return VERSION
@@ -35,4 +41,5 @@ class FireAnalysisProvider(QgsProcessingProvider):
         return QIcon(os.path.join(os.path.dirname(__file__), 'icon.svg'))
 
     def loadAlgorithms(self):  # noqa: N802 (QGIS API name)
-        self.addAlgorithm(_PluginBurnSeveritySummary())
+        for alg in (FindHlsScenes(), FetchHlsNbr(), _PluginBurnSeveritySummary()):
+            self.addAlgorithm(alg)

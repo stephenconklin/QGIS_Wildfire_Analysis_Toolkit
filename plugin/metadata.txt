@@ -1,18 +1,18 @@
-; dev/build_plugin.py fills in version from VERSION in burn_severity_summary.py.
+; dev/build_plugin.py fills in version from VERSION in fireanalysis/__init__.py.
 [general]
 name=Burn Severity Summary
 qgisMinimumVersion=3.40
 qgisMaximumVersion=4.99
 supportsQt6=True
-description=Classify dNBR, RdNBR or RBR into burn severity classes and summarize the area of each class for a fire and its sub-areas.
-about=One Processing tool (Fire Analysis > Burn severity summary) that builds a burned-area zone and optional sub-area zones such as watersheds, classifies raw dNBR with the USGS Key & Benson (2006) thresholds or RdNBR (Miller & Thode 2007) and RBR (Parks et al. 2014) from a pre-fire NBR raster, counts pixels per class with Zonal Histogram, and writes a one-row-per-class summary table (percent, hectares and acres for each zone) ready for a layout bar chart. Uses only QGIS's built-in Processing tools.
+description=Fetch NBR from NASA HLS imagery, classify dNBR, RdNBR or RBR into burn severity classes, and summarize the area of each class for a fire and its sub-areas.
+about=Fire Analysis Processing tools. Imagery: find NASA HLS v2.0 (Landsat 8/9 and Sentinel-2) scenes over an area of interest and fetch cloud-masked NBR for just that window (needs a NASA Earthdata login in ~/.netrc). Severity: Burn severity summary builds a burned-area zone and optional sub-area zones such as watersheds, classifies raw dNBR with the USGS Key & Benson (2006) thresholds or RdNBR (Miller & Thode 2007) and RBR (Parks et al. 2014) from a pre-fire NBR raster, counts pixels per class with Zonal Histogram, and writes a one-row-per-class summary table (percent, hectares and acres for each zone) ready for a layout bar chart. Uses only QGIS's built-in Processing tools.
 version=0.0.0
 author=Stephen Conklin
 email=stephenconklin@gmail.com
 homepage=https://github.com/stephenconklin/QGIS_Burn_Severity
 repository=https://github.com/stephenconklin/QGIS_Burn_Severity
 tracker=https://github.com/stephenconklin/QGIS_Burn_Severity/issues
-tags=burn severity,dnbr,rdnbr,rbr,nbr,wildfire,fire,landsat,sentinel-2,zonal statistics,processing
+tags=burn severity,hls,earthdata,stac,dnbr,rdnbr,rbr,nbr,wildfire,fire,landsat,sentinel-2,zonal statistics,processing
 category=Analysis
 icon=icon.svg
 hasProcessingProvider=yes

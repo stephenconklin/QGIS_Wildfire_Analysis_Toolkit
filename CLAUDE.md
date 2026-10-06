@@ -1,10 +1,10 @@
 # CLAUDE.md — developer notes for QGIS Burn Severity Summary
 
-This file orients Claude Code (and any developer) to the project. Read it before changing `burn_severity_summary.py`.
+This file orients Claude Code (and any developer) to the project. Read it before changing `burn_severity_summary.py` or `fireanalysis/`. The pipeline plan and the verified service details are in `docs/DESIGN.md`.
 
 ## What this is
 
-A single-file QGIS Processing script that classifies burn severity (raw dNBR with the USGS Key & Benson 2006 thresholds, or RdNBR / RBR from dNBR plus a pre-fire NBR) and summarizes percent, hectares and acres per class for a burned area (zone A) and optional sub-areas inside it (one zone B, or one zone per value of a name field). It ships two ways: as a Processing script, and as a plugin that wraps the same file. User docs are in `README.md`; version history is in `CHANGELOG.md`.
+A single-file QGIS Processing script that classifies burn severity (raw dNBR with the USGS Key & Benson 2006 thresholds, or RdNBR / RBR from dNBR plus a pre-fire NBR) and summarizes percent, hectares and acres per class for a burned area (zone A) and optional sub-areas inside it (one zone B, or one zone per value of a name field). It ships two ways: as a Processing script, and as a plugin that wraps the same file. Since 2.0 (in development) the plugin is growing into a fire analysis pipeline modeled on the MTBS QGIS Fire Mapping Tool (FMT3): the `fireanalysis/` package adds imagery algorithms (HLS search and fetch so far). The script stays standalone and unchanged. User docs are in `README.md`; version history is in `CHANGELOG.md`.
 
 It automates a manual workflow first done for GEOG 400 (Raster GIS) Lab 6 at Fort Lewis College, which compared the 2025 Dragon Bravo Fire with the Bright Angel Creek watershed, Grand Canyon. The original step-by-step methods are in the lab's `_Notes/Severity_Chart_Methods.md` (see *Full Lab 6 data* below).
 
@@ -15,10 +15,13 @@ The repository is local only so far: no remote, nothing pushed. Plugin metadata 
 | Path | Purpose |
 |---|---|
 | `burn_severity_summary.py` | The whole tool: one `QgsProcessingAlgorithm` subclass plus QGIS 3/4 compatibility helpers. |
-| `plugin/` | Plugin wrapper: `__init__.py` (`classFactory`), `plugin.py` (registers the provider), `provider.py` (provider `fireanalysis`; subclasses the algorithm to drop its group), `metadata.txt` (version filled in at build), `icon.svg`. |
-| `dev/build_plugin.py` | Plain Python. Copies `plugin/*`, the script, `LICENSE` and `README.md` into `dist/qgis_burn_severity-<version>.zip`, setting `version=` from `VERSION` and `changelog=` from the latest `CHANGELOG.md` entry. `dist/` is gitignored. |
+| `fireanalysis/` | Pipeline package, plugin only. `__init__.py` holds the plugin `VERSION`. `compat.py` (QGIS 3/4 helpers, a copy of the script's), `earthdata.py` (netrc check, GDAL path-specific options), `stac.py` (STAC search via `QgsBlockingNetworkRequest`), `hls.py` (HLS constants, granule ids, URLs, Fmask), `algorithms/` (one module per algorithm). Relative imports only, so it works both inside the plugin folder and from the repo root. |
+| `plugin/` | Plugin wrapper: `__init__.py` (`classFactory`), `plugin.py` (registers the provider), `provider.py` (provider `fireanalysis`; registers the imagery algorithms and subclasses the summary to put it in group Severity), `metadata.txt` (version filled in at build), `icon.svg`. |
+| `docs/DESIGN.md` | Pipeline plan: FMT3 comparison, decisions, Earthdata findings, algorithm specs, phases, validation plan. |
+| `dev/build_plugin.py` | Plain Python. Copies `plugin/*`, the script, `fireanalysis/**/*.py`, `LICENSE` and `README.md` into `dist/qgis_burn_severity-<version>.zip`, setting `version=` from `fireanalysis/__init__.py` and `changelog=` from the latest `CHANGELOG.md` entry. `dist/` is gitignored. |
 | `dev/smoke_test.py` | Runs every mode on `testdata/` (two zones, zone A only, per-name zones, RdNBR, RBR), the full Lab 6 data if present, and the error cases. Checks pixel counts, summary field names and row count, and that the severity raster has a CRS. Works in the QGIS Python Console or headless. |
-| `dev/run_headless.sh` | Runs the smoke test with a QGIS macOS app's bundled Python (sets `PYTHONHOME`, `PYTHONPATH`, `PROJ_DATA`, offscreen Qt). Default app `/Applications/QGIS.app`. |
+| `dev/online_test.py` | Live test of Find HLS scenes and Fetch HLS NBR on the test-data burned area (S30 2024-09-13, L30 2025-09-15): expected tiles, identical pre/post grids, UTM 12N, NBR range, missing-netrc and wrong-layer errors; prints the HLS dNBR classes. Needs a network and `~/.netrc`. About 50 s. |
+| `dev/run_headless.sh` | Runs a dev script (default `smoke_test.py`; second argument, e.g. `online_test.py`) with a QGIS macOS app's bundled Python (sets `PYTHONHOME`, `PYTHONPATH`, `PROJ_DATA`, offscreen Qt). Default app `/Applications/QGIS.app`. |
 | `dev/make_testdata.py` | Rebuilds `testdata/` from the full Lab 6 data (run inside QGIS). |
 | `testdata/` | About 6 MB: `dnbr.tif`, `prefire_nbr.tif` and `testdata.gpkg` (layers `burn_area`, `watershed`, `subareas`), plus a README with expected counts and data sources. `.gitignore` excludes GIS files except these. |
 | `docs/images/` | README images: `severity_map.png` (rendered offscreen in a separate `QgsProject` from a full-data run, severity clipped to zone A), `chart.png` (the Lab 6 layout chart, `Severity_Chart_600dpi_white_bg.png`, resized to 1200 px), `dialog.png` (the tool dialog with test-data inputs, 900 px). |
@@ -27,7 +30,8 @@ The repository is local only so far: no remote, nothing pushed. Plugin metadata 
 ## Identity — do not change casually
 
 - Algorithm `name()` `burnseveritysummary`: id `script:burnseveritysummary` as a script, `fireanalysis:burnseveritysummary` in the plugin. Saved models refer to these.
-- Script group **Fire Analysis** (`groupId()` `fireanalysis`). In the plugin, the provider has that name and the algorithm has no group.
+- Script group **Fire Analysis** (`groupId()` `fireanalysis`). In the plugin, the provider has that name and the summary sits in group **Severity** (`severity`); group ids aren't part of algorithm ids.
+- Plugin algorithms `fireanalysis:findhlsscenes` (params `AOI`, `START`, `END`, `SENSORS`, `MAX_CLOUD`, output `OUTPUT`) and `fireanalysis:fetchhlsnbr` (`AOI`, `SCENES`, `BUFFER`, `CRS`, `MASK`, `NETRC`, outputs `NBR`, `REFLECTANCE`, `FMASK`), group **Imagery**. Unreleased, so these can still change; after 2.0.0 the same rules apply as for the summary. The `MASK` enum follows `hls.FMASK_CLASSES` order: append only.
 - Parameter names are the API for `processing.run`: `DNBR`, `INDEX`, `PRE_NBR`, `BURN_AREA`, `ZONE_A_NAME`, `WATERSHED` (now any sub-area layer; name kept for compatibility), `SUBAREA_FIELD`, `ZONE_B_NAME`, `TABLE`, `CLASS_NAMES`, `ZONE_A_CODE`, `ZONE_B_CODE`, and outputs `ZONES`, `SEVERITY`, `HISTOGRAM`, `SUMMARY`. Renaming one is a major version change.
 - The `INDEX` enum order (0 dNBR, 1 RdNBR, 2 RBR) is API too. Append new indices; don't reorder.
 - Summary fields `ord`, `sev_class`, then `pct_`, `ha_`, `ac_` + zone code, grouped by measure. Default codes `db` / `ba` keep the Lab 6 layout chart working.
@@ -41,7 +45,10 @@ The code only runs inside QGIS. Test with both versions before committing:
 ```
 dev/run_headless.sh /Applications/QGIS.app                   # 3.44
 dev/run_headless.sh /Applications/QGIS-final-4_2_3.app       # 4.2
+dev/run_headless.sh /Applications/QGIS.app online_test.py    # HLS, needs network + ~/.netrc
 ```
+
+Bundled Pythons: 3.44 has GDAL 3.12, 4.2.3 has GDAL 3.13; both have numpy and the JP2OpenJPEG driver. The python.org `python3` on this Mac has no CA certificates, so test network code only with a bundled Python. Don't run the bundled Python with `-I`: it ignores `PYTHONHOME` and crashes.
 
 The desktop session matters too, because it has behaved differently from headless runs (see the CRS bug below). If the QGIS MCP server is connected, Claude can run the smoke test in the live session with `execute_code`: `exec(open('<repo>/dev/smoke_test.py').read())`. Each `execute_code` call starts with a fresh namespace. In the session's Python, `gdal.Open(...).GetProjection()` has given misleading results, so check output CRSs with `QgsRasterLayer(path).crs()` or the app's `gdalinfo` (set `PROJ_DATA` to `<app>/Contents/Resources/qgis/proj`).
 
@@ -57,6 +64,13 @@ The desktop session matters too, because it has behaved differently from headles
 6. **Summary.** One feature per class in a no-geometry sink. Pixel area comes from the raster cell size. A class missing from the histogram counts as 0.
 
 `PRESETS` holds the index labels, tables and class names. Published RdNBR/RBR thresholds are ×1000, so they are divided by 1000 for raw units.
+
+### Imagery (fireanalysis)
+
+- Network: STAC calls go through `QgsBlockingNetworkRequest` (QGIS proxy/SSL settings, cancel via feedback). Raster reads go through GDAL `/vsicurl/`.
+- Earthdata: netrc plus a cookie jar, set with `gdal.SetPathSpecificOption` on `/vsicurl/https://data.lpdaac.earthdatacloud.nasa.gov/` only. Bearer tokens failed (LP DAAC signs the HEAD redirect for HEAD only; see DESIGN.md). **Never set `CPL_CURL_VERBOSE` or print request headers with live credentials**: curl sends `Authorization: Basic` to URS and the trace prints it. That leaked the user's password into a session transcript once (2026-10-06).
+- Fetch HLS NBR: AOI → 4326 → target CRS (default UTM of the AOI centroid), buffer, bounds snapped outward to 30 m; `gdal.Warp` to MEM per band (nearest within the tiles' zone, bilinear when reprojecting, nearest for Fmask); NBR where data, not masked, NIR and SWIR2 > 0.
+- Dragon Bravo covers MGRS tiles 12SUF/12SVF/12SUE/12SVE; the test-data AOI needs 12SUF and 12SVF.
 
 ### The CRS bug
 
@@ -77,6 +91,8 @@ Outside the repo, in the user's OneDrive (the raw data zip is 2.6 GB):
   _Notes/Severity_Chart_Methods.md                  the original manual method
 ```
 
+**The lab `dNBR.tif` is miscalibrated.** Rebuilt from the raw zip files (`Lab6-data-2026.zip`: Sentinel-2 L2A 2024-09-13 B8A/B12 20 m jp2 for 12SUF and 12SVF, no MTD/SCL; Landsat 9 C2 L2 US ARD `LC09_CU_007011_20250915` SR bands, Albers WGS84, no QA_PIXEL), it matches (RMSE 0.026) S2 NBR from DN/10000 *without* the −1000 offset minus L9 NBR from *raw DN*. Correctly calibrated: mean dNBR 0.476 in the test-data burned area, classes 2/20/27/27/24 %; HLS gives 0.500 and 2.2/17.3/25.8/27.7/27.0 %. BAER SBS (soil, not comparable 1:1): 7/65/26/2 %. The summary tests keep using the lab raster as their reference; the README example carries a note.
+
 Expected dNBR pixel counts on the full data (classes 1–5): Dragon Bravo 11,556 / 290,803 / 188,947 / 55,906 / 44 (547,256); Bright Angel 3,997 / 78,398 / 57,213 / 16,001 / 9 (155,618). Test-data counts are in `testdata/README.md` and `dev/smoke_test.py`.
 
 ## Installed copies
@@ -85,7 +101,8 @@ The Lab 6 project's QGIS has the script installed through **Add Script to Toolbo
 
 ## Conventions
 
-- Keep the tool a single file with no dependencies beyond QGIS. The plugin only wraps it.
-- Bump `VERSION` (semver) and add a `CHANGELOG.md` entry for every change. Keep the README's parameter and output tables and the smoke-test expectations up to date.
-- Run the smoke test headless on 3.44 and 4.2 before committing a change to the algorithm, and in the desktop session when the change touches outputs.
+- Keep `burn_severity_summary.py` a single file with no dependencies beyond QGIS, so it still installs as a script. Everything new goes in `fireanalysis/`, depending only on PyQGIS, GDAL and numpy (no rasterio, pystac-client, earthaccess).
+- Use the MTBS conventions FMT3 documents, but don't copy FMT3 code (no license).
+- Bump the version (semver) and add a `CHANGELOG.md` entry for every change: `VERSION` in `fireanalysis/__init__.py` for the plugin, and `VERSION` in `burn_severity_summary.py` when the script itself changes. Keep the README's parameter and output tables and the smoke-test expectations up to date.
+- Run the smoke test headless on 3.44 and 4.2 before committing a change to the algorithm, and in the desktop session when the change touches outputs. Run `online_test.py` too when `fireanalysis/` changes.
 - Never add Claude or Claude Code author or co-author credits anywhere: commits, PRs, README, changelog or code.
