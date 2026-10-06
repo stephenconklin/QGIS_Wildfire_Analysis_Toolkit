@@ -195,9 +195,14 @@ class SeverityMap(QgsProcessingAlgorithm):
         bar.setUnits(_try(lambda: Qgis.DistanceUnit.Kilometers, lambda: QgsUnitTypes.DistanceKilometers))
         bar.setUnitLabel('km')
         bar.setNumberOfSegments(4)
-        bar.setUnitsPerSegment(max(1, round(extent.width() / 1000 / 8)))
+        # Four segments of a round length that fit the 90 mm column (about 20 mm each)
+        km_per_mm = m.extent().width() / 1000.0 / 185.0
+        nice = [0.1, 0.2, 0.25, 0.5, 1, 2, 2.5, 5, 10, 20, 25, 50, 100]
+        bar.setUnitsPerSegment(max([n for n in nice if n <= 20 * km_per_mm] or [nice[0]]))
+        bar.setSegmentSizeMode(_try(lambda: Qgis.ScaleBarSegmentSizeMode.Fixed,
+                                    lambda: QgsLayoutItemScaleBar.SegmentSizeFixed))
         layout.addLayoutItem(bar)
-        bar.attemptMove(QgsLayoutPoint(12, 188, _mm()))
+        bar.attemptMove(QgsLayoutPoint(200, 188, _mm()))  # right column, clear of the map
         arrow = QgsLayoutItemPicture(layout)
         arrow.setPicturePath(':/images/north_arrows/layout_default_north_arrow.svg')
         layout.addLayoutItem(arrow)
