@@ -158,18 +158,15 @@ class HlsBurnSeverity(QgsProcessingAlgorithm):
         return res
 
     @staticmethod
-    def _map_png(classes_path, perimeter, png, context):
+    def _map_png(classes_path, geom, crs, png, context):
+        """dnbr6.png: the classes with the burned-area outline (geom in crs)."""
         from osgeo import gdal
+        from qgis.core import QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsGeometry
         from .. import raster
-        from .build_dnbr import source_union
         ds = gdal.Open(classes_path)
         classes = ds.GetRasterBand(1).ReadAsArray()
-        layer = QgsProcessingUtils.mapLayerFromString(perimeter, context) if isinstance(perimeter, str) else perimeter
-        geom, crs = source_union(layer, 'burned-area')
-        from qgis.core import QgsGeometry
         ring = QgsGeometry(geom.constGet().boundary())  # polygon boundary as lines
         width = 1.5 * abs(ds.GetGeoTransform()[1])  # outline about 1.5 pixels wide
-        from qgis.core import QgsCoordinateTransform, QgsCoordinateReferenceSystem
         rcrs = QgsCoordinateReferenceSystem.fromWkt(ds.GetProjection())
         ring.transform(QgsCoordinateTransform(crs, rcrs, context.transformContext()))
         outline = raster.rasterize(ring.buffer(width / 2, 4), rcrs, ds, context.transformContext())
@@ -299,7 +296,9 @@ class HlsBurnSeverity(QgsProcessingAlgorithm):
 
         # 6. Report, with a map picture of the classes
         try:
-            self._map_png(classes, perimeter, os.path.join(folder, 'dnbr6.png'), context)
+            from .build_dnbr import source_union
+            geom, crs = source_union(self.parameterAsSource(parameters, self.PERIMETER, context), 'burned-area')
+            self._map_png(classes, geom, crs, os.path.join(folder, 'dnbr6.png'), context)
         except Exception as e:  # a picture must never fail the assessment
             log.setdefault('pipeline', []).append(f'WARNING Could not draw dnbr6.png: {e}')
         report['warnings'] = [m[len('WARNING '):] for msgs in log.values() for m in msgs if m.startswith('WARNING ')]

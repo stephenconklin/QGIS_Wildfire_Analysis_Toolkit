@@ -399,6 +399,16 @@ if res is not None:
     check("severity map: PDF and PNG written",
           res is not None and os.path.getsize(pdf) > 10000 and os.path.getsize(png) > 10000, " | ".join(log))
 
+
+# 11. Provenance: local-scene NBR metadata reaches the dNBR (POST_SOURCE_DATE etc.)
+a_ls, _ = run_local(LS)
+res, log = _run(BuildDnbr(), {"PRE_NBR": os.path.join(OUT, os.path.basename(LS) + ".tif"),
+                              "POST_NBR": os.path.join(OUT, os.path.basename(LS) + ".tif"), "OFFSET_METHOD": 0,
+                              "DNBR": os.path.join(OUT, "dnbr_prov.tif"), "RDNBR": None, "RBR": None})
+md = gdal.Open(res["DNBR"]).GetMetadata() if res else {}
+check("provenance: POST_SOURCE_DATE and POST_CALIBRATION copied into the dNBR",
+      md.get("POST_SOURCE_DATE") == "2025-09-15" and "POST_CALIBRATION" in md, str(md)[:300])
+
 print(f"\n{'ALL PASSED' if not failed else f'{failed} FAILED'}")
 if _app is not None:
     _app.exitQgis()

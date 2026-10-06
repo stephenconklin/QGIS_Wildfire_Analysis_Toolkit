@@ -235,13 +235,13 @@ class SeverityMap(QgsProcessingAlgorithm):
             v = float(v)
             return 'none' if v >= 9.999 else f'{v:.3f}'
         lines = []
-        pre = md.get('PRE_HLS_DATE') or md.get('PRE_SOURCE_DATE')
-        post = md.get('POST_HLS_DATE') or md.get('POST_SOURCE_DATE')
+        def when(prefix):
+            date = md.get(f'{prefix}_HLS_DATE') or md.get(f'{prefix}_SOURCE_DATE')
+            sensor = md.get(f'{prefix}_HLS_SENSOR') or md.get(f'{prefix}_SOURCE_SENSOR')
+            return f'{date}{f" ({sensor})" if sensor else ""}' if date else None
+        pre, post = when('PRE'), when('POST')
         if pre or post:
-            lines.append(f'Images: pre-fire {pre or "?"}, post-fire {post or "?"}'
-                         + (f' ({md.get("POST_HLS_SENSOR") or md.get("POST_SOURCE_SENSOR")}, '
-                            f'{md.get("PRE_HLS_SENSOR") or md.get("PRE_SOURCE_SENSOR")} pre)'
-                            if (md.get('POST_HLS_SENSOR') or md.get('POST_SOURCE_SENSOR')) else '') + '.')
+            lines.append(f'Images: pre-fire {pre or "?"}, post-fire {post or "?"}.')
         if 'LOW_T' in md:
             lines.append(f'dNBR thresholds: low {thr("LOW_T")}, moderate {thr("MODERATE_T")}, '
                          f'high {thr("HIGH_T")}; offset {float(md.get("DNBR_OFFSET", 0)):.3f}.')

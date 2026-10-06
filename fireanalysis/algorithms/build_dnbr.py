@@ -222,7 +222,7 @@ class BuildDnbr(QgsProcessingAlgorithm):
                     'DNBR_OFFSET_N': n}
         for prefix, ds in (('PRE', pre_ds), ('POST', post_ds)):
             for key, value in (ds.GetMetadata() or {}).items():
-                if key.startswith(('HLS_', 'FMASK_')):
+                if key.startswith(('HLS_', 'FMASK_', 'SOURCE_', 'CALIBRATION', 'MASKED')):  # provenance of each date
                     metadata[f'{prefix}_{key}'] = value
         subtract = self.parameterAsBoolean(parameters, self.SUBTRACT_OFFSET, context)
         corrected = dnbr - offset
