@@ -35,7 +35,7 @@ import urllib.request
 try:
     REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 except NameError:
-    REPO = "/Users/stephenconklin/Documents/ConklinGeospatial/Projects/GITHub/QGIS_Burn_Severity"
+    REPO = "/Users/stephenconklin/Documents/ConklinGeospatial/Projects/GITHub/QGIS_Wildfire_Analysis_Toolkit"
 sys.path.insert(0, REPO)
 
 from qgis.core import (Qgis, QgsApplication, QgsGeometry, QgsProcessingContext,  # noqa: E402

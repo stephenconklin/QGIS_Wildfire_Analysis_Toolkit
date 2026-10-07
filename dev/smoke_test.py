@@ -2,7 +2,7 @@
 Smoke test for Burn Severity Summary.
 
 Inside QGIS (Python Console):
-    exec(open('/path/to/QGIS_Burn_Severity/dev/smoke_test.py').read())
+    exec(open('/path/to/QGIS_Wildfire_Analysis_Toolkit/dev/smoke_test.py').read())
 
 Headless, against any installed QGIS (macOS):
     dev/run_headless.sh /Applications/QGIS.app
@@ -26,7 +26,7 @@ LAB = ("/Users/stephenconklin/Library/CloudStorage/OneDrive-FortLewisCollege/"
 try:
     REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 except NameError:  # exec() from the console has no __file__
-    REPO = "/Users/stephenconklin/Documents/ConklinGeospatial/Projects/GITHub/QGIS_Burn_Severity"
+    REPO = "/Users/stephenconklin/Documents/ConklinGeospatial/Projects/GITHub/QGIS_Wildfire_Analysis_Toolkit"
 T = os.path.join(REPO, "testdata") + os.sep
 
 from qgis.core import (Qgis, QgsApplication, QgsProcessingContext,  # noqa: E402

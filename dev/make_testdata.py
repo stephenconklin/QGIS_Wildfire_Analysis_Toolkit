@@ -1,7 +1,7 @@
 """
 Rebuild testdata/ from the full Lab 6 rasters and polygons. Run inside QGIS:
 
-    exec(open('/path/to/QGIS_Burn_Severity/dev/make_testdata.py').read())
+    exec(open('/path/to/QGIS_Wildfire_Analysis_Toolkit/dev/make_testdata.py').read())
 
 Clips everything to the Bright Angel watershed's extent plus a 2 km margin
 (EPSG:26912), so the burned area there is a partial zone A and the whole
@@ -22,7 +22,7 @@ LAB = ("/Users/stephenconklin/Library/CloudStorage/OneDrive-FortLewisCollege/"
 try:
     REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 except NameError:  # exec() from the console has no __file__
-    REPO = "/Users/stephenconklin/Documents/ConklinGeospatial/Projects/GITHub/QGIS_Burn_Severity"
+    REPO = "/Users/stephenconklin/Documents/ConklinGeospatial/Projects/GITHub/QGIS_Wildfire_Analysis_Toolkit"
 OUT = os.path.join(REPO, "testdata")
 os.makedirs(OUT, exist_ok=True)
 
