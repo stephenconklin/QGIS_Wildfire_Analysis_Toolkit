@@ -574,6 +574,38 @@ if details is not None and details.postProcessor() is not None:
 check(f"classify: loaded classes get the MTBS palette (renderer {styled})", styled == "paletted",
       " | ".join(fb.log[-3:]))
 
+# 16. Pipeline results load into one styled group per run; a rerun into the same folder reuses it
+import shutil  # noqa: E402
+try:
+    from processing.gui.Postprocessing import handleAlgorithmResults  # noqa: E402
+except ImportError:
+    handleAlgorithmResults = None
+if handleAlgorithmResults is not None and os.path.exists(out_path):
+    run = os.path.join(OUT, "fake_run")
+    os.makedirs(run, exist_ok=True)
+    for src, dst in ((out_path, "dnbr6.tif"), (T + "dnbr.tif", "dnbr.tif"), (T + "prefire_nbr.tif", "nbr_pre.tif")):
+        shutil.copy(src, os.path.join(run, dst))
+    project = QgsProject.instance()
+    groups = []
+    for _ in range(2):
+        alg = BurnSeverityPipeline()
+        alg.initAlgorithm()
+        ctx = QgsProcessingContext()
+        ctx.setProject(project)
+        alg._load({"LOAD": 0}, ctx, "Test fire", run, False, 0.1, 0.27, 0.66)
+        handleAlgorithmResults(alg, ctx, QgsProcessingFeedback(), {})
+        groups = [g for g in project.layerTreeRoot().findGroups(True) if g.name().startswith("Test fire")]
+    nodes = groups[0].findLayers() if groups else []
+    got = [(n.layer().name(), n.isVisible(), n.layer().renderer().type()) for n in nodes]
+    want = [("Severity classes (MTBS)", True, "paletted"),
+            ("dNBR (thresholds 0.100 / 0.270 / 0.660)", False, "singlebandpseudocolor"),
+            ("Pre-fire NBR", False, "singlebandgray")]
+    check("pipeline results: one group, named, ordered, styled, only the classes shown; reused on rerun",
+          len(groups) == 1 and got == want, f"{[g.name() for g in groups]} {got}")
+    for g in groups:
+        project.removeMapLayers([n.layerId() for n in g.findLayers()])
+        g.parent().removeChildNode(g)
+
 print(f"\n{'ALL PASSED' if not failed else f'{failed} FAILED'}")
 if _app is not None:
     _app.exitQgis()

@@ -2,8 +2,7 @@
 threshold estimates when the analyst gives none."""
 import os
 
-from qgis.core import (QgsGeometry, QgsPalettedRasterRenderer, QgsProcessingAlgorithm,
-                       QgsProcessingLayerPostProcessorInterface, QgsProcessingException, QgsProcessingOutputNumber,
+from qgis.core import (QgsGeometry, QgsProcessingAlgorithm, QgsProcessingException, QgsProcessingOutputNumber,
                        QgsProcessingParameterEnum, QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterNumber, QgsProcessingParameterRasterDestination,
                        QgsProcessingParameterRasterLayer)
@@ -83,29 +82,12 @@ def write_png(classes, like, outline, path, max_size=1600):
         os.remove(aux)
 
 
-def apply_mtbs_style(layer):
-    """Give a dnbr6 raster layer the MTBS class colours (paletted, band 1)."""
-    from qgis.PyQt.QtGui import QColor
-    classes = [QgsPalettedRasterRenderer.Class(v, QColor(CLASS_COLORS[v]), CLASS_NAMES[v]) for v in sorted(CLASS_NAMES)]
-    layer.setRenderer(QgsPalettedRasterRenderer(layer.dataProvider(), 1, classes))
-    layer.triggerRepaint()
-
-
-class _MtbsStyle(QgsProcessingLayerPostProcessorInterface):
-    """Styles the classes when Processing adds them to the project. Processing loads
-    outputs without their default (.qml) style, so this is needed."""
-    keep = []  # QGIS holds only a pointer: keep the Python objects alive
-
-    def postProcessLayer(self, layer, context, feedback):
-        if layer is not None and layer.isValid():
-            apply_mtbs_style(layer)
-
-
 def style_on_load(context, path):
-    """Apply the MTBS colours to path when it is loaded on completion."""
+    """Give path the MTBS colours when Processing loads it (it skips the .qml)."""
     if context.willLoadLayerOnCompletion(path):
-        post = _MtbsStyle()
-        _MtbsStyle.keep = _MtbsStyle.keep[-20:] + [post]
+        from ..styles import StyleOnLoad, mtbs_classes
+        post = StyleOnLoad(mtbs_classes)
+        StyleOnLoad.keep = StyleOnLoad.keep[-50:] + [post]
         context.layerToLoadOnCompletionDetails(path).setPostProcessor(post)
 
 

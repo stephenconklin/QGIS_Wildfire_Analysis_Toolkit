@@ -9,22 +9,22 @@ import json
 import os
 
 from qgis.core import (QgsDataSourceUri, QgsDistanceArea, QgsProcessing, QgsProcessingAlgorithm,
-                       QgsProcessingContext, QgsProcessingException, QgsProcessingFeatureSourceDefinition,
+                       QgsProcessingException, QgsProcessingFeatureSourceDefinition,
                        QgsProcessingMultiStepFeedback, QgsProcessingOutputFile, QgsProcessingOutputFolder,
                        QgsProcessingOutputRasterLayer, QgsProcessingOutputVectorLayer,
                        QgsProcessingParameterDateTime, QgsProcessingParameterEnum,
                        QgsProcessingParameterFeatureSource, QgsProcessingParameterField,
                        QgsProcessingParameterFolderDestination, QgsProcessingParameterNumber,
-                       QgsProcessingParameterString, QgsProcessingUtils, QgsProject, QgsVectorLayer)
+                       QgsProcessingParameterString, QgsProcessingUtils, QgsVectorLayer)
 
 from qgis.PyQt.QtCore import QDate
 
 from .. import VERSION
 from ..incident import fire_details
+from .. import styles
 from ..compat import advanced, date_type, double_type, integer_type, polygon_source
 from .build_dnbr import BuildDnbr, source_union
 from .draft_perimeter import DraftPerimeter
-from .classify_severity import style_on_load
 from .classify_severity import CLASS_COLORS, ESTIMATES, NEARBY, NONE_VALUE, OWN_DATA, ClassifySeverity, write_png
 from .fetch_hls_nbr import FetchHlsNbr
 from .planetary_algorithms import FetchPlanetaryNbr
@@ -34,6 +34,9 @@ CLASSES = ['Unburned to low', 'Low', 'Moderate', 'High']
 # PERIMETER_MODE options; order is API (append only)
 PERIMETER_MODES = ['As given', 'Drafted from dNBR inside the given polygons (a generous outline)']
 AS_GIVEN, DRAFTED = 0, 1
+# LOAD options; order is API (append only)
+LOAD_MODES = ['Results, styled, in a group named after the fire and date', 'Severity classes only', 'Nothing']
+LOAD_GROUP, LOAD_CLASSES, LOAD_NOTHING = 0, 1, 2
 DRAFT_HOLE_HA = 2.0  # largest unburned hole filled in a drafted burned area
 
 
@@ -68,6 +71,7 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
     MODERATE_T = 'MODERATE_T'
     HIGH_T = 'HIGH_T'
     MIN_CLEAR = 'MIN_CLEAR'
+    LOAD = 'LOAD'
     OUTPUT_FOLDER = 'OUTPUT_FOLDER'
     FOLDER = 'FOLDER'
     DNBR = 'DNBR'
@@ -166,6 +170,8 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
         self.addParameter(advanced(QgsProcessingParameterNumber(
             self.MIN_CLEAR, 'Minimum clear share inside the area for a suggested pair (%)', type=integer_type(),
             minValue=0, maxValue=100, defaultValue=95)))
+        self.addParameter(advanced(QgsProcessingParameterEnum(
+            self.LOAD, 'Load into the project', options=LOAD_MODES, defaultValue=LOAD_GROUP)))
         self.addParameter(QgsProcessingParameterFolderDestination(self.OUTPUT_FOLDER, 'Output folder'))
         self.addOutput(QgsProcessingOutputFolder(self.FOLDER, 'Output folder'))
         self.addOutput(QgsProcessingOutputRasterLayer(self.DNBR, 'dNBR'))
@@ -217,6 +223,33 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
         if geom is not None:
             info.update(_area(geom, crs, context))
         return info
+
+    def _load(self, parameters, context, fire, folder, drafted, low, moderate, high):
+        """Load the results into the project: by default into one group per run, named
+        after the fire and date, styled, with only the classes and outlines switched on."""
+        mode = self.parameterAsEnum(parameters, self.LOAD, context)
+        f = lambda name: os.path.join(folder, name)  # noqa: E731
+        if mode == LOAD_NOTHING:
+            return
+        if mode == LOAD_CLASSES:
+            styles.load_on_completion(context, f('dnbr6.tif'), f'{fire} severity classes (MTBS)', styles.mtbs_classes)
+            return
+        group = styles.unique_group(context, f'{fire} {datetime.date.today().isoformat()}', f('dnbr6.tif'))
+        # (file, name, style, shown, vector); listed top to bottom
+        layers = [('zones.gpkg', 'Burned area and sub-areas', styles.zones(fire), True, True),
+                  ('perimeter_draft.gpkg', 'Drafted burned area (to edit)', styles.outline('200,0,0,255', 0.4, True),
+                   False, True),
+                  ('dnbr6.tif', 'Severity classes (MTBS)', styles.mtbs_classes, True, False),
+                  ('dnbr.tif', f'dNBR (thresholds {low:.3f} / {moderate:.3f} / {high:.3f})',
+                   styles.index_ramp(-0.5, 1.0), False, False),
+                  ('rdnbr.tif', 'RdNBR', styles.index_ramp(-1.0, 2.0), False, False),
+                  ('rbr.tif', 'RBR', styles.index_ramp(-0.3, 0.6), False, False),
+                  ('reflectance_post.tif', 'Post-fire reflectance (SWIR2 / NIR / red)', styles.false_color, False, False),
+                  ('nbr_post.tif', 'Post-fire NBR', styles.gray(-1, 1), False, False),
+                  ('nbr_pre.tif', 'Pre-fire NBR', styles.gray(-1, 1), False, False)]
+        for i, (name, label, style, shown, vector) in enumerate(layers):
+            if (name != 'perimeter_draft.gpkg' or drafted) and os.path.exists(f(name)):
+                styles.load_on_completion(context, f(name), label, style, shown, group, len(layers) - i, vector)
 
     @staticmethod
     def _map_png(classes_path, geom, crs, png, context):
@@ -422,10 +455,7 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
             f.write(_html(report, fields, rows))
         feedback.pushInfo(f'Report: {html_path}')
 
-        for path, name in ((classes, f'{fire} severity classes (MTBS)'), (dnbr, f'{fire} dNBR')):
-            context.addLayerToLoadOnCompletion(
-                path, QgsProcessingContext.LayerDetails(name, context.project() or QgsProject.instance(), name))
-        style_on_load(context, classes)
+        self._load(parameters, context, fire, folder, drafted, low, moderate, high)
         return {self.FOLDER: folder, self.DNBR: dnbr, self.CLASSES: classes, self.SUMMARY: summary,
                 self.REPORT: html_path}
 
