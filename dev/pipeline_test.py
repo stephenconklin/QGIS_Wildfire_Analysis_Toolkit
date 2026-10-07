@@ -553,6 +553,27 @@ check("no dates and no WFIGS record: asks for the dates", res is None and any("S
                                                                              for m in log), " | ".join(log[-3:]))
 check("non-WFIGS layer: no record", read_incident(QgsVectorLayer(BURN, "b", "ogr")) is None)
 
+# 15. The classes get the MTBS colours when Processing loads them (it skips the .qml default style)
+from qgis.core import QgsProcessingOutputLayerDefinition, QgsRasterLayer  # noqa: E402
+alg = ClassifySeverity()
+alg.initAlgorithm()
+p = {d.name(): d.defaultValue() for d in alg.parameterDefinitions()}
+out_path = os.path.join(OUT, "classes_loaded.tif")
+p.update({"DNBR": T + "dnbr.tif", "PERIMETER": BURN, "LOW_T": 0.1, "MODERATE_T": 0.27, "HIGH_T": 0.66,
+          "OUTPUT": QgsProcessingOutputLayerDefinition(out_path, QgsProject.instance())})
+ctx = QgsProcessingContext()
+ctx.setProject(QgsProject.instance())
+fb = _Feedback()
+res, ok = alg.create().run(p, ctx, fb)
+details = ctx.layersToLoadOnCompletion().get(out_path) if ok else None
+styled = None
+if details is not None and details.postProcessor() is not None:
+    lyr = QgsRasterLayer(out_path, "classes")
+    details.postProcessor().postProcessLayer(lyr, ctx, fb)
+    styled = lyr.renderer().type()
+check(f"classify: loaded classes get the MTBS palette (renderer {styled})", styled == "paletted",
+      " | ".join(fb.log[-3:]))
+
 print(f"\n{'ALL PASSED' if not failed else f'{failed} FAILED'}")
 if _app is not None:
     _app.exitQgis()

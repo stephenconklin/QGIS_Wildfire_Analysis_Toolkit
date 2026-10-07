@@ -2,7 +2,8 @@
 threshold estimates when the analyst gives none."""
 import os
 
-from qgis.core import (QgsGeometry, QgsProcessingAlgorithm, QgsProcessingException, QgsProcessingOutputNumber,
+from qgis.core import (QgsGeometry, QgsPalettedRasterRenderer, QgsProcessingAlgorithm,
+                       QgsProcessingLayerPostProcessorInterface, QgsProcessingException, QgsProcessingOutputNumber,
                        QgsProcessingParameterEnum, QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterNumber, QgsProcessingParameterRasterDestination,
                        QgsProcessingParameterRasterLayer)
@@ -80,6 +81,32 @@ def write_png(classes, like, outline, path, max_size=1600):
     aux = path + '.aux.xml'
     if os.path.exists(aux):
         os.remove(aux)
+
+
+def apply_mtbs_style(layer):
+    """Give a dnbr6 raster layer the MTBS class colours (paletted, band 1)."""
+    from qgis.PyQt.QtGui import QColor
+    classes = [QgsPalettedRasterRenderer.Class(v, QColor(CLASS_COLORS[v]), CLASS_NAMES[v]) for v in sorted(CLASS_NAMES)]
+    layer.setRenderer(QgsPalettedRasterRenderer(layer.dataProvider(), 1, classes))
+    layer.triggerRepaint()
+
+
+class _MtbsStyle(QgsProcessingLayerPostProcessorInterface):
+    """Styles the classes when Processing adds them to the project. Processing loads
+    outputs without their default (.qml) style, so this is needed."""
+    keep = []  # QGIS holds only a pointer: keep the Python objects alive
+
+    def postProcessLayer(self, layer, context, feedback):
+        if layer is not None and layer.isValid():
+            apply_mtbs_style(layer)
+
+
+def style_on_load(context, path):
+    """Apply the MTBS colours to path when it is loaded on completion."""
+    if context.willLoadLayerOnCompletion(path):
+        post = _MtbsStyle()
+        _MtbsStyle.keep = _MtbsStyle.keep[-20:] + [post]
+        context.layerToLoadOnCompletionDetails(path).setPostProcessor(post)
 
 
 def write_style(path):
@@ -348,5 +375,6 @@ class ClassifySeverity(QgsProcessingAlgorithm):
         metadata.update({k: v for k, v in md.items() if k.startswith(('PRE_', 'POST_'))})
         raster.write(out, [('dnbr6', classes)], dnbr_ds, gdal.GDT_Byte, 255, metadata)
         if os.path.splitext(out)[1].lower() in ('.tif', '.tiff'):
-            write_style(out)
+            write_style(out)  # for adding the raster by hand later
+        style_on_load(context, out)
         return {self.OUTPUT: out, self.LOW_T: low, self.MODERATE_T: moderate, self.HIGH_T: high}

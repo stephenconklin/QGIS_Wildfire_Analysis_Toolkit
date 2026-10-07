@@ -24,6 +24,7 @@ from ..incident import fire_details
 from ..compat import advanced, date_type, double_type, integer_type, polygon_source
 from .build_dnbr import BuildDnbr, source_union
 from .draft_perimeter import DraftPerimeter
+from .classify_severity import style_on_load
 from .classify_severity import CLASS_COLORS, ESTIMATES, NEARBY, NONE_VALUE, OWN_DATA, ClassifySeverity, write_png
 from .fetch_hls_nbr import FetchHlsNbr
 from .planetary_algorithms import FetchPlanetaryNbr
@@ -424,6 +425,7 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
         for path, name in ((classes, f'{fire} severity classes (MTBS)'), (dnbr, f'{fire} dNBR')):
             context.addLayerToLoadOnCompletion(
                 path, QgsProcessingContext.LayerDetails(name, context.project() or QgsProject.instance(), name))
+        style_on_load(context, classes)
         return {self.FOLDER: folder, self.DNBR: dnbr, self.CLASSES: classes, self.SUMMARY: summary,
                 self.REPORT: html_path}
 
