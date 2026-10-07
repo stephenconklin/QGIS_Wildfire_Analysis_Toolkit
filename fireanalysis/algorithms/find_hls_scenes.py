@@ -15,10 +15,21 @@ from ..compat import date_type, field, integer_type, polygon_source, polygon_wkb
 WGS84 = 'EPSG:4326'
 
 
+def refuse_scene_layer(source, what):
+    """Stop when a polygon input is a scenes layer from Find HLS scenes or Find Landsat /
+    Sentinel-2 scenes: their footprints are 110-185 km tiles, not the fire."""
+    names = set(source.fields().names())
+    if 'date' in names and ('granule' in names or {'item', 'collection'} <= names):
+        raise QgsProcessingException(
+            f'The {what} layer is a scenes layer (image footprints from a Find ... scenes run), not your '
+            'fire\'s polygons. Choose the burned-area or area-of-interest layer instead.')
+
+
 def aoi_geometry(source, context):
     """Union of the AOI features, in EPSG:4326."""
     if source is None:
         raise QgsProcessingException('The area of interest layer could not be loaded.')
+    refuse_scene_layer(source, 'area of interest')
     xform = QgsCoordinateTransform(source.sourceCrs(), QgsCoordinateReferenceSystem(WGS84),
                                    context.transformContext())
     parts = []
@@ -162,8 +173,12 @@ class FindHlsScenes(QgsProcessingAlgorithm):
         clear = {}
         if self.parameterAsBoolean(parameters, self.AOI_CLEAR, context) and rows:
             from .suggest_image_pairs import candidate_dates
-            found = candidate_dates('hls', [(r[0], r[1], r[2], None) for r in rows], aoi, context, feedback,
-                                    'Clear share inside the AOI')
+            try:
+                found = candidate_dates('hls', [(r[0], r[1], r[2], None) for r in rows], aoi, context, feedback,
+                                        'Clear share inside the AOI')
+            except QgsProcessingException as e:  # optional: keep the scenes without it
+                warn(feedback, f'Clear share not measured: {e}')
+                found = {}
             clear = {(d.isoformat(), sensor): (c, data) for (d, sensor), (c, data, _) in found.items()}
             if feedback.isCanceled():
                 return {}

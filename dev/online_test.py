@@ -3,7 +3,7 @@ Online test for the HLS algorithms (needs a network and an Earthdata login in
 ~/.netrc). The offline smoke test is dev/smoke_test.py.
 
 Inside QGIS (Python Console):
-    exec(open('/path/to/QGIS_Burn_Severity/dev/online_test.py').read())
+    exec(open('/path/to/QGIS_Wildfire_Analysis_Toolkit/dev/online_test.py').read())
 
 Headless (macOS):
     dev/run_headless.sh /Applications/QGIS-final-4_2_3.app online_test.py
@@ -31,7 +31,7 @@ import tempfile
 try:
     REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 except NameError:  # exec() from the console has no __file__
-    REPO = "/Users/stephenconklin/Documents/ConklinGeospatial/Projects/GITHub/QGIS_Burn_Severity"
+    REPO = "/Users/stephenconklin/Documents/ConklinGeospatial/Projects/GITHub/QGIS_Wildfire_Analysis_Toolkit"
 sys.path.insert(0, REPO)
 
 from qgis.core import (Qgis, QgsApplication, QgsProcessingContext,  # noqa: E402
@@ -237,8 +237,29 @@ if len(granule_ids) == 2:
               str(rep["summary"])[:300])
         check("pipeline: report lists the clipped-perimeter warning",
               any("looks burned" in w for w in rep["warnings"]), str(rep["warnings"]))
+        inputs = rep.get("inputs") or {}
+        check("pipeline: report names the perimeter and sub-area layers, with the perimeter's area",
+              "burn_area" in (inputs.get("perimeter") or {}).get("source", "")
+              and (inputs["perimeter"].get("area_ha") or 0) > 0
+              and "watershed" in (inputs.get("subareas") or {}).get("source", ""), str(inputs)[:400])
         print("      thresholds: " + ", ".join(f"{k} {rep['thresholds'][k]:.3f}" for k in ("low", "moderate", "high"))
               + f"; cross-check {rep['thresholds'].get('alternative')}")
+    # ... with the burned area drafted from dNBR inside the test burned area as the outline
+    folder = os.path.join(OUT, "pipeline_drafted")
+    res, _, log = _run(BurnSeverityPipeline(), {
+        "PERIMETER": AOI, "PERIMETER_MODE": 1, "FIRE_NAME": "Dragon Bravo", "FIRE_START": QDate(2025, 7, 4),
+        "FIRE_END": QDate(2025, 9, 1), "PRE_GRANULES": granule_ids["pre"], "POST_GRANULES": granule_ids["post"],
+        "OUTPUT_FOLDER": folder})
+    check("pipeline, drafted burned area: runs", res is not None, " | ".join(log[-5:]))
+    if res is not None:
+        with open(os.path.join(folder, "report.json"), encoding="utf-8") as f:
+            rep = json.load(f)
+        d = rep.get("perimeter_draft") or {}
+        check(f"pipeline, drafted burned area: perimeter_draft.gpkg, {d.get('area_ha', 0):,.0f} ha = "
+              f"{d.get('share_of_outline') or 0:.0f} % of the outline, used for the summary",
+              os.path.exists(os.path.join(folder, "perimeter_draft.gpkg")) and 0 < (d.get("share_of_outline") or 0) <= 100.5
+              and len(rep["summary"]) == 4 and "drafted from dNBR" in open(os.path.join(folder, "report.html")).read(),
+              str(d))
     # ... and with the image pair chosen by Suggest image pairs
     folder = os.path.join(OUT, "pipeline_auto")
     res, _, log = _run(BurnSeverityPipeline(), {

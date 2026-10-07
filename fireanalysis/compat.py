@@ -37,6 +37,10 @@ def polygon_wkb():
     return _try(lambda: Qgis.WkbType.Polygon, lambda: QgsWkbTypes.Polygon)
 
 
+def polygon_geometry_type():
+    return _try(lambda: Qgis.GeometryType.Polygon, lambda: QgsWkbTypes.PolygonGeometry)
+
+
 def meters():
     return _try(lambda: Qgis.DistanceUnit.Meters, lambda: QgsUnitTypes.DistanceMeters)
 

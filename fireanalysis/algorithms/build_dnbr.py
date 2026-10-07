@@ -28,6 +28,8 @@ def source_union(source, what):
     """(union geometry, CRS) of a polygon source, in its own CRS."""
     if source is None:
         raise QgsProcessingException(f'The {what} layer could not be loaded.')
+    from .find_hls_scenes import refuse_scene_layer
+    refuse_scene_layer(source, what)
     parts = [QgsGeometry(f.geometry()).makeValid() for f in source.getFeatures() if f.hasGeometry()]
     if not parts:
         raise QgsProcessingException(f'The {what} layer has no polygons.')

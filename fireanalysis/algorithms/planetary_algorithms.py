@@ -10,7 +10,7 @@ from qgis.core import (QgsCoordinateReferenceSystem, QgsDistanceArea, QgsFeature
                        QgsProcessingParameterRasterDestination, QgsProcessingParameterString)
 
 from .. import VERSION, planetary, stac
-from ..compat import date_type, double_type, field, integer_type, polygon_source, polygon_wkb
+from ..compat import date_type, double_type, field, integer_type, polygon_source, polygon_wkb, warn
 from .find_hls_scenes import WGS84, aoi_geometry
 from .prepare_local_nbr import MASK_CLASSES, write_scene_nbr
 
@@ -128,8 +128,12 @@ class FindPlanetaryScenes(QgsProcessingAlgorithm):
         clear = {}
         if self.parameterAsBoolean(parameters, self.AOI_CLEAR, context) and rows:
             from .suggest_image_pairs import SHORT, candidate_dates
-            found = candidate_dates(source, [(r[0], r[1], SHORT.get(str(r[2]).lower(), r[2]), r[7]) for r in rows],
-                                    aoi, context, feedback, 'Clear share inside the AOI')
+            try:
+                found = candidate_dates(source, [(r[0], r[1], SHORT.get(str(r[2]).lower(), r[2]), r[7]) for r in rows],
+                                        aoi, context, feedback, 'Clear share inside the AOI')
+            except QgsProcessingException as e:  # optional: keep the scenes without it
+                warn(feedback, f'Clear share not measured: {e}')
+                found = {}
             for (d, sensor), (c, data, ids) in found.items():
                 for iid in ids:
                     clear[iid] = (c, data)

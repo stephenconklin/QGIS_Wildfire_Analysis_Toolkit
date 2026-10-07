@@ -2,11 +2,11 @@
 point for the analyst (MTBS digitizes the perimeter by hand from the imagery)."""
 from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsFeature, QgsFeatureSink, QgsFields,
                        QgsGeometry, QgsProcessingAlgorithm, QgsProcessingException,
-                       QgsProcessingParameterFeatureSink, QgsProcessingParameterFeatureSource,
+                       QgsProcessingParameterBoolean, QgsProcessingParameterFeatureSink, QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterNumber, QgsProcessingParameterRasterLayer)
 
 from .. import VERSION, raster
-from ..compat import double_type, field, polygon_source, warn
+from ..compat import double_type, field, polygon_geometry_type, polygon_source, warn
 from .build_dnbr import source_union
 
 
@@ -68,6 +68,7 @@ class DraftPerimeter(QgsProcessingAlgorithm):
     MIN_AREA = 'MIN_AREA'
     HOLE_AREA = 'HOLE_AREA'
     SEED = 'SEED'
+    CLIP = 'CLIP'
     OUTPUT = 'OUTPUT'
 
     def name(self):
@@ -87,7 +88,9 @@ class DraftPerimeter(QgsProcessingAlgorithm):
             '<p>Drafts burned-area polygons from dNBR: pixels at or above the threshold, small patches '
             'removed and small unburned holes filled, then turned into polygons. Optional seed polygons '
             '(an ignition point buffer, a rough outline, a reported perimeter) keep only the burned '
-            'patches that touch them, which drops other fires and noise.</p>'
+            'patches that touch them, which drops other fires and noise. With <i>Clip to the seed</i>, '
+            'the result is also cut to the seed polygons, for a generous outline drawn around the '
+            'whole fire.</p>'
             '<p>MTBS analysts digitize the perimeter by hand from the imagery; this is a draft to edit, '
             'not a replacement. Check it against the post-fire reflectance, especially at low-severity '
             'edges and in wet or sparse vegetation.</p>'
@@ -106,6 +109,8 @@ class DraftPerimeter(QgsProcessingAlgorithm):
             self.HOLE_AREA, 'Largest unburned hole filled (ha)', type=double_type(), minValue=0, defaultValue=2))
         self.addParameter(QgsProcessingParameterFeatureSource(
             self.SEED, 'Seed polygons (keep burned patches touching them)', [polygon_source()], optional=True))
+        self.addParameter(QgsProcessingParameterBoolean(
+            self.CLIP, 'Clip to the seed polygons', defaultValue=False))
         self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, 'Draft perimeter', polygon_source()))
 
     def processAlgorithm(self, parameters, context, feedback):
@@ -133,6 +138,11 @@ class DraftPerimeter(QgsProcessingAlgorithm):
         if not polygons:
             warn(feedback, 'No burned patch found; lower the threshold or check the seed.')
         merged = QgsGeometry.unaryUnion(polygons) if polygons else QgsGeometry()
+        if parameters.get(self.SEED) and self.parameterAsBoolean(parameters, self.CLIP, context) and polygons:
+            merged = merged.intersection(seed)  # may hold edge slivers as lines or points
+            if merged.isMultipart() and not merged.isEmpty():
+                merged.convertGeometryCollectionToSubclass(polygon_geometry_type())  # in place
+            feedback.pushInfo('Clipped to the seed polygons.')
         fields = QgsFields()
         fields.append(field('area_ha', 'double'))
         fields.append(field('threshold', 'double'))

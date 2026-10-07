@@ -4,7 +4,7 @@ local scene NBR (on synthetic Landsat and Sentinel-2 products), Build dNBR,
 Classify severity, Draft burned-area perimeter and Severity map (PDF). The online HLS test is dev/online_test.py.
 
 Inside QGIS (Python Console):
-    exec(open('/path/to/QGIS_Burn_Severity/dev/pipeline_test.py').read())
+    exec(open('/path/to/QGIS_Wildfire_Analysis_Toolkit/dev/pipeline_test.py').read())
 
 Headless (macOS):
     dev/run_headless.sh /Applications/QGIS-final-4_2_3.app pipeline_test.py
@@ -23,7 +23,7 @@ import tempfile
 try:
     REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 except NameError:  # exec() from the console has no __file__
-    REPO = "/Users/stephenconklin/Documents/ConklinGeospatial/Projects/GITHub/QGIS_Burn_Severity"
+    REPO = "/Users/stephenconklin/Documents/ConklinGeospatial/Projects/GITHub/QGIS_Wildfire_Analysis_Toolkit"
 sys.path.insert(0, REPO)
 
 from qgis.core import (Qgis, QgsApplication, QgsGeometry, QgsProcessingContext,  # noqa: E402
@@ -387,6 +387,16 @@ if res is not None:
     iou = draft.intersection(truth).area() / draft.combine(truth).area()
     check(f"draft perimeter seeded with the test burned area overlaps it (IoU {iou:.2f})", iou > 0.5,
           " | ".join(fb.log))
+    # Clipped to the seed: nothing outside it, and still polygons
+    p.update({"CLIP": True})
+    fb = _Feedback()
+    res, ok = alg.create().run(p, ctx, fb)
+    clipped = next(QgsProcessingUtils.mapLayerFromString(res["OUTPUT"], ctx).getFeatures()).geometry()
+    outside = clipped.difference(truth.buffer(1, 4)).area()
+    check(f"draft perimeter clipped to the seed: nothing outside it ({outside:.0f} m²), "
+          f"{clipped.area() / 1e4:,.0f} of {draft.area() / 1e4:,.0f} ha kept",
+          ok and outside < 1 and 0 < clipped.area() <= draft.area() and clipped.type() == draft.type(),
+          " | ".join(fb.log))
 
 
 # 10. Severity map (PDF) from classes made with given thresholds
@@ -408,6 +418,52 @@ res, log = _run(BuildDnbr(), {"PRE_NBR": os.path.join(OUT, os.path.basename(LS) 
 md = gdal.Open(res["DNBR"]).GetMetadata() if res else {}
 check("provenance: POST_SOURCE_DATE and POST_CALIBRATION copied into the dNBR",
       md.get("POST_SOURCE_DATE") == "2025-09-15" and "POST_CALIBRATION" in md, str(md)[:300])
+
+
+# 12. Pipeline report inputs: which perimeter and sub-areas a run used, and the perimeter's area
+from fireanalysis.algorithms.build_dnbr import source_union  # noqa: E402
+from fireanalysis.algorithms.burn_severity_pipeline import BurnSeverityPipeline, _inputs_html  # noqa: E402
+pipe = BurnSeverityPipeline()
+pipe.initAlgorithm()
+ctx = QgsProcessingContext()
+ctx.setProject(QgsProject.instance())
+burn_layer = QgsVectorLayer(BURN, "burn_area", "ogr")
+geom, crs = source_union(burn_layer, "burned-area")
+info = pipe._layer_info({"PERIMETER": BURN}, "PERIMETER", ctx, geom, crs)
+planar = geom.area() / 1e4  # EPSG:26912, so close to the ellipsoidal area
+check(f"report inputs: perimeter source, features and area ({info and info.get('area_ha', 0):,.0f} ha, "
+      f"planar {planar:,.0f})",
+      info is not None and "testdata.gpkg" in info["source"] and info["features"] == burn_layer.featureCount()
+      and abs(info["area_ha"] - planar) / planar < 0.01 and not info["temporary"], str(info))
+mem = QgsVectorLayer("Polygon?crs=EPSG:26912", "drawn", "memory")
+QgsProject.instance().addMapLayer(mem)
+info_mem = pipe._layer_info({"SUBAREAS": mem.id()}, "SUBAREAS", ctx)
+page = _inputs_html({"inputs": {"perimeter": info, "subareas": info_mem, "subarea_name": "Drawn"}})
+check("report inputs: temporary layer flagged, both layers in the HTML",
+      info_mem is not None and info_mem["temporary"] and "burn_area" in page and "temporary layer" in page,
+      str(info_mem) + " | " + page[:300])
+check("report inputs: none for an empty optional layer", pipe._layer_info({"SUBAREAS": None}, "SUBAREAS", ctx) is None)
+QgsProject.instance().removeMapLayer(mem.id())
+
+# 13. A scenes layer (Find ... scenes output) given as the area of interest or perimeter is refused
+from qgis.core import QgsFeature  # noqa: E402
+from qgis.PyQt.QtCore import QDate  # noqa: E402
+from fireanalysis.algorithms.find_hls_scenes import FindHlsScenes  # noqa: E402
+for label, spec in (("HLS", "granule:string&field=sensor:string&field=date:string"),
+                    ("Planetary Computer", "item:string&field=collection:string&field=platform:string&field=date:string")):
+    scenes = QgsVectorLayer(f"Polygon?crs=EPSG:4326&field={spec}", "scenes", "memory")
+    ft = QgsFeature(scenes.fields())
+    ft.setGeometry(QgsGeometry.fromWkt("POLYGON((-112.2 36.1,-112.0 36.1,-112.0 36.3,-112.2 36.3,-112.2 36.1))"))
+    scenes.dataProvider().addFeatures([ft])
+    res, log = _run(FindHlsScenes(), {"AOI": scenes, "START": QDate(2025, 7, 4), "END": QDate(2025, 9, 30),
+                                      "OUTPUT": "TEMPORARY_OUTPUT"})
+    check(f"{label} scenes layer as the area of interest is refused",
+          res is None and any("scenes layer" in m for m in log), " | ".join(log[-3:]))
+    res, log = _run(BuildDnbr(), {"PRE_NBR": T + "prefire_nbr.tif", "POST_NBR": T + "prefire_nbr.tif",
+                                  "PERIMETER": scenes, "DNBR": os.path.join(OUT, "dnbr_scenes.tif"),
+                                  "RDNBR": None, "RBR": None})
+    check(f"{label} scenes layer as the burned area is refused",
+          res is None and any("scenes layer" in m for m in log), " | ".join(log[-3:]))
 
 print(f"\n{'ALL PASSED' if not failed else f'{failed} FAILED'}")
 if _app is not None:

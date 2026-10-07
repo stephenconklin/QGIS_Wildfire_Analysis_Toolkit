@@ -8,7 +8,8 @@ import importlib.util
 import json
 import os
 
-from qgis.core import (QgsProcessing, QgsProcessingAlgorithm, QgsProcessingContext, QgsProcessingException,
+from qgis.core import (QgsDataSourceUri, QgsDistanceArea, QgsProcessing, QgsProcessingAlgorithm,
+                       QgsProcessingContext, QgsProcessingException, QgsProcessingFeatureSourceDefinition,
                        QgsProcessingMultiStepFeedback, QgsProcessingOutputFile, QgsProcessingOutputFolder,
                        QgsProcessingOutputRasterLayer, QgsProcessingOutputVectorLayer,
                        QgsProcessingParameterDateTime, QgsProcessingParameterEnum,
@@ -18,13 +19,18 @@ from qgis.core import (QgsProcessing, QgsProcessingAlgorithm, QgsProcessingConte
 
 from .. import VERSION
 from ..compat import advanced, date_type, double_type, integer_type, polygon_source
-from .build_dnbr import BuildDnbr
+from .build_dnbr import BuildDnbr, source_union
+from .draft_perimeter import DraftPerimeter
 from .classify_severity import CLASS_COLORS, ESTIMATES, NEARBY, NONE_VALUE, OWN_DATA, ClassifySeverity, write_png
 from .fetch_hls_nbr import FetchHlsNbr
 from .planetary_algorithms import FetchPlanetaryNbr
 from .suggest_image_pairs import ASSESSMENTS, INITIAL, SOURCES, SuggestImagePairs
 
 CLASSES = ['Unburned to low', 'Low', 'Moderate', 'High']
+# PERIMETER_MODE options; order is API (append only)
+PERIMETER_MODES = ['As given', 'Drafted from dNBR inside the given polygons (a generous outline)']
+AS_GIVEN, DRAFTED = 0, 1
+DRAFT_HOLE_HA = 2.0  # largest unburned hole filled in a drafted burned area
 
 
 def _summary_algorithm():
@@ -41,6 +47,9 @@ def _summary_algorithm():
 class BurnSeverityPipeline(QgsProcessingAlgorithm):
     SOURCE = 'SOURCE'
     PERIMETER = 'PERIMETER'
+    PERIMETER_MODE = 'PERIMETER_MODE'
+    DRAFT_THRESHOLD = 'DRAFT_THRESHOLD'
+    DRAFT_MIN_AREA = 'DRAFT_MIN_AREA'
     FIRE_NAME = 'FIRE_NAME'
     FIRE_START = 'FIRE_START'
     FIRE_END = 'FIRE_END'
@@ -82,6 +91,8 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
             '<li><i>Fetch HLS NBR</i> or <i>Fetch Landsat / Sentinel-2 NBR</i> for both dates (3 km '
             'buffer, UTM grid), with the post-fire SWIR2/NIR/red reflectance for display;</li>'
             '<li><i>Build dNBR</i>: dNBR, RdNBR and the offset from a ring outside the burned area;</li>'
+            '<li>with <i>Burned area: drafted from dNBR</i>, <i>Draft burned-area perimeter</i> inside '
+            'the given polygons (perimeter_draft.gpkg), which then serves as the burned area;</li>'
             '<li><i>Classify severity (MTBS classes)</i> with your or estimated thresholds;</li>'
             '<li><i>Burn severity summary</i>: percent, hectares and acres per class for the fire and '
             'its sub-areas;</li>'
@@ -91,6 +102,13 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
             'Landsat 4–9 Collection 2 (from 1982) or Sentinel-2 L2A through Planetary Computer (no '
             'account). Everything is written to the output folder. Choosing the pair reads the quality '
             'band of every candidate date, about a minute or two.</p>'
+            '<p><b>Burned area.</b> <i>As given</i> uses your polygons for everything: draw them along '
+            'the burned edge. <i>Drafted from dNBR</i> takes a generous outline drawn around the whole '
+            'fire instead: it sets the imagery window and the unburned ring for the offset, and the '
+            'burned area is drafted inside it (dNBR at or above the threshold, small patches dropped, '
+            'small holes filled). The draft is a starting point (mean IoU 0.69–0.73 against MTBS '
+            'perimeters): edit perimeter_draft.gpkg against the imagery and rerun with it as given for a '
+            'final assessment.</p>'
             '<p>Validated against 17 MTBS fires: with MTBS\'s thresholds the classes agree with MTBS '
             'at kappa 0.78; estimated thresholds are a starting point (kappa about 0.56). See the '
             'README.</p>'
@@ -101,7 +119,9 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
 
     def initAlgorithm(self, config=None):
         self.addParameter(QgsProcessingParameterFeatureSource(
-            self.PERIMETER, 'Burned-area polygons', [polygon_source()]))
+            self.PERIMETER, 'Burned-area polygons (or a generous outline, when drafted)', [polygon_source()]))
+        self.addParameter(QgsProcessingParameterEnum(
+            self.PERIMETER_MODE, 'Burned area', options=PERIMETER_MODES, defaultValue=AS_GIVEN))
         self.addParameter(QgsProcessingParameterEnum(
             self.SOURCE, 'Imagery', options=[s[1] for s in SOURCES], defaultValue=0))
         self.addParameter(QgsProcessingParameterString(self.FIRE_NAME, 'Fire name', 'Fire'))
@@ -127,6 +147,11 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
             self.PRE_GRANULES, 'Pre-fire granule or item ids (instead of suggesting a pair)', optional=True)))
         self.addParameter(advanced(QgsProcessingParameterString(
             self.POST_GRANULES, 'Post-fire granule or item ids (instead of suggesting a pair)', optional=True)))
+        self.addParameter(advanced(QgsProcessingParameterNumber(
+            self.DRAFT_THRESHOLD, 'Drafted burned area: dNBR of at least', type=double_type(), defaultValue=0.05)))
+        self.addParameter(advanced(QgsProcessingParameterNumber(
+            self.DRAFT_MIN_AREA, 'Drafted burned area: smallest patch kept (ha)', type=double_type(), minValue=0,
+            defaultValue=20)))
         self.addParameter(advanced(QgsProcessingParameterNumber(
             self.MIN_CLEAR, 'Minimum clear share inside the area for a suggested pair (%)', type=integer_type(),
             minValue=0, maxValue=100, defaultValue=95)))
@@ -163,6 +188,25 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
             raise QgsProcessingException(f'{alg.displayName()} failed; see the log above.')
         return res
 
+    def _layer_info(self, parameters, name, context, geom=None, crs=None):
+        """Where a polygon input came from, for the report: layer name, source (no password),
+        feature count, CRS, selected features only, and the area of geom (its union)."""
+        value = parameters.get(name)
+        if value in (None, ''):
+            return None
+        source = self.parameterAsSource(parameters, name, context)
+        layer = self.parameterAsVectorLayer(parameters, name, context)
+        info = {'layer': layer.name() if layer else str(value),
+                'source': QgsDataSourceUri.removePassword(layer.source()) if layer else str(value),
+                'provider': layer.providerType() if layer else '',
+                'features': source.featureCount() if source else None,
+                'crs': source.sourceCrs().authid() if source else '',
+                'selected_only': isinstance(value, QgsProcessingFeatureSourceDefinition) and value.selectedFeaturesOnly}
+        info['temporary'] = info['provider'] == 'memory'
+        if geom is not None:
+            info.update(_area(geom, crs, context))
+        return info
+
     @staticmethod
     def _map_png(classes_path, geom, crs, png, context):
         """dnbr6.png: the classes with the burned-area outline (geom in crs)."""
@@ -190,13 +234,30 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
         end = self.parameterAsDateTime(parameters, self.FIRE_END, context).date()
         assessment = self.parameterAsEnum(parameters, self.ASSESSMENT, context)
         perimeter = parameters[self.PERIMETER]
+        drafted = self.parameterAsEnum(parameters, self.PERIMETER_MODE, context) == DRAFTED
         source_index = self.parameterAsEnum(parameters, self.SOURCE, context)
         source = SOURCES[source_index][0]
-        steps = QgsProcessingMultiStepFeedback(6, feedback)
+        steps = QgsProcessingMultiStepFeedback(7 if drafted else 6, feedback)
         log, report = {}, {'fireanalysis_version': VERSION, 'created': datetime.datetime.now().isoformat(timespec='seconds'),
                            'fire': fire, 'fire_start': start.toString('yyyy-MM-dd'),
                            'fire_end': end.toString('yyyy-MM-dd'), 'assessment': ASSESSMENTS[assessment],
                            'imagery': SOURCES[source_index][1]}
+
+        # Inputs, so a report says which perimeter and sub-areas it used
+        geom, crs = source_union(self.parameterAsSource(parameters, self.PERIMETER, context), 'burned-area')
+        given = {k.lower(): self.parameterAsDouble(parameters, k, context)
+                 for k in (self.LOW_T, self.MODERATE_T, self.HIGH_T) if parameters.get(k) not in (None, '')}
+        report['inputs'] = {
+            'perimeter': self._layer_info(parameters, self.PERIMETER, context, geom, crs),
+            'subareas': self._layer_info(parameters, self.SUBAREAS, context),
+            'subarea_field': self.parameterAsString(parameters, self.SUBAREA_FIELD, context) or None,
+            'subarea_name': self.parameterAsString(parameters, self.SUBAREA_NAME, context) or None,
+            'estimate': ESTIMATES[self.parameterAsEnum(parameters, self.ESTIMATE, context)],
+            'thresholds_given': given,
+            'granules_given': bool((self.parameterAsString(parameters, self.PRE_GRANULES, context) or '').strip()),
+            'min_clear': self.parameterAsInt(parameters, self.MIN_CLEAR, context),
+            'output_folder': folder,
+            'perimeter_mode': PERIMETER_MODES[self.parameterAsEnum(parameters, self.PERIMETER_MODE, context)]}
 
         # 1. Image pair
         pre_g = (self.parameterAsString(parameters, self.PRE_GRANULES, context) or '').strip()
@@ -243,7 +304,32 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
             'RBR': os.path.join(folder, 'rbr.tif')}, context, steps, log)
         dnbr = res['DNBR']
         report['offset'] = {'value': res['OFFSET'], 'std': res['OFFSET_STD'], 'pixels': res['OFFSET_N'],
-                            'method': 'median dNBR in a ring 90-2090 m outside the burned area'}
+                            'method': 'median dNBR in a ring 90-2090 m outside the '
+                                      + ('given outline' if drafted else 'burned area')}
+
+        # 3b. Burned area drafted from dNBR inside the given outline; it replaces the perimeter from here on
+        if drafted:
+            threshold = self.parameterAsDouble(parameters, self.DRAFT_THRESHOLD, context)
+            min_area = self.parameterAsDouble(parameters, self.DRAFT_MIN_AREA, context)
+            res = self._child(DraftPerimeter(), {
+                'DNBR': dnbr, 'THRESHOLD': threshold, 'MIN_AREA': min_area, 'HOLE_AREA': DRAFT_HOLE_HA, 'SEED': perimeter, 'CLIP': True,
+                'OUTPUT': os.path.join(folder, 'perimeter_draft.gpkg')}, context, steps, log)
+            layer = QgsProcessingUtils.mapLayerFromString(res['OUTPUT'], context) \
+                or QgsVectorLayer(res['OUTPUT'], 'perimeter_draft', 'ogr')
+            if not layer or not layer.isValid() or layer.featureCount() == 0:
+                raise QgsProcessingException(
+                    f'No burned area found at dNBR >= {threshold} inside the given polygons. Lower the threshold, '
+                    'or check the outline and the image pair.')
+            perimeter = res['OUTPUT']
+            geom, crs = source_union(layer, 'drafted burned-area')
+            info = _area(geom, crs, context)
+            outline_ha = report['inputs']['perimeter']['area_ha']
+            report['perimeter_draft'] = {
+                'file': 'perimeter_draft.gpkg', 'threshold': threshold, 'min_area_ha': min_area,
+                'hole_area_ha': DRAFT_HOLE_HA, 'area_ha': info['area_ha'], 'area_ac': info['area_ac'],
+                'share_of_outline': 100.0 * info['area_ha'] / outline_ha if outline_ha else None}
+            feedback.pushInfo(f'Drafted burned area: {info["area_ha"]:,.0f} ha ({info["area_ac"]:,.0f} ac), '
+                              f'{report["perimeter_draft"]["share_of_outline"]:.0f} % of the given outline.')
         steps.setCurrentStep(3)
 
         # 4. MTBS classes
@@ -310,8 +396,6 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
 
         # 6. Report, with a map picture of the classes
         try:
-            from .build_dnbr import source_union
-            geom, crs = source_union(self.parameterAsSource(parameters, self.PERIMETER, context), 'burned-area')
             self._map_png(classes, geom, crs, os.path.join(folder, 'dnbr6.png'), context)
         except Exception as e:  # a picture must never fail the assessment
             log.setdefault('pipeline', []).append(f'WARNING Could not draw dnbr6.png: {e}')
@@ -330,6 +414,15 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
                 path, QgsProcessingContext.LayerDetails(name, context.project() or QgsProject.instance(), name))
         return {self.FOLDER: folder, self.DNBR: dnbr, self.CLASSES: classes, self.SUMMARY: summary,
                 self.REPORT: html_path}
+
+
+def _area(geom, crs, context):
+    """{'area_ha', 'area_ac'} of geom (in crs), measured on the ellipsoid."""
+    da = QgsDistanceArea()
+    da.setSourceCrs(crs, context.transformContext())
+    da.setEllipsoid(context.ellipsoid() if context.ellipsoid() not in ('', 'NONE') else 'EPSG:7030')
+    area = da.measureArea(geom)  # square meters
+    return {'area_ha': area / 1e4, 'area_ac': area / 4046.8564224}
 
 
 def _chart(fields, rows):
@@ -358,6 +451,39 @@ def _lower_first(text):
     return text[:1].lower() + text[1:]
 
 
+def _inputs_html(r):
+    """The Inputs section: which perimeter and sub-area layers the run used."""
+    e = html.escape
+    i = r.get('inputs') or {}
+
+    def layer(info):
+        if not info:
+            return ''
+        notes = [f'{info["features"]:,} feature(s)' if info.get('features') is not None else '',
+                 info.get('crs') or '', 'selected features only' if info.get('selected_only') else '',
+                 'temporary layer, not saved' if info.get('temporary') else '']
+        if 'area_ha' in info:
+            notes.insert(0, f'{info["area_ha"]:,.0f} ha ({info["area_ac"]:,.0f} ac)')
+        return (f'{e(info["layer"])} <span class="note">({e(", ".join(n for n in notes if n))})</span>'
+                f'<br><code>{e(info["source"])}</code>')
+    d = r.get('perimeter_draft')
+    if d:
+        out = [f'<h2>Inputs</h2><p>Burned area: <b>drafted from dNBR</b>, {d["area_ha"]:,.0f} ha ({d["area_ac"]:,.0f} ac), '
+               f'{d["share_of_outline"]:.0f} % of the outline; dNBR at least {d["threshold"]:g}, patches of '
+               f'{d["min_area_ha"]:g} ha or more, holes up to {d["hole_area_ha"]:g} ha filled '
+               f'(<code>{e(d["file"])}</code>). '
+               '<span class="note">A draft: edit it against the imagery and rerun with it as given for a final '
+               'assessment.</span></p>'
+               f'<p>Outline (imagery window and offset ring): {layer(i.get("perimeter"))}</p>']
+    else:
+        out = [f'<h2>Inputs</h2><p>Burned area: {layer(i.get("perimeter"))}</p>']
+    if i.get('subareas'):
+        how = (f'one zone per value of <code>{e(i["subarea_field"])}</code>' if i.get('subarea_field')
+               else f'one zone, {e(i.get("subarea_name") or "Sub-area")}')
+        out.append(f'<p>Sub-areas ({how}): {layer(i["subareas"])}</p>')
+    return ''.join(out)
+
+
 def _html(r, fields, rows):
     """A plain, self-contained report page."""
     e = html.escape
@@ -379,10 +505,11 @@ th{{background:#f3f3f3}}td:first-child,th:first-child{{text-align:left}}h1{{font
 code{{font-size:.85em}}.note{{color:#555}}</style></head><body>
 <h1>{e(r["fire"])}: burn severity</h1>
 <p>Fire {e(r["fire_start"])} to {e(r["fire_end"])}, {e(_lower_first(r["assessment"]))}. Wildfire Analysis Toolkit {e(r["fireanalysis_version"])}, {e(r["created"])}.</p>
+{_inputs_html(r)}
 <h2>Severity by class</h2>
 {_chart(fields, rows)}
 <table><tr>{"".join(f"<th>{e(n)}</th>" for n in fields)}</tr>{rows_html}</table>
-{'<h2>Map</h2><p><img src="dnbr6.png" alt="Burn severity classes" style="max-width:100%;border:1px solid #ccc"></p><p class="note">Dark green unburned to low, aquamarine low, yellow moderate, red high, light green increased greenness, grey no data; black line: burned-area boundary.</p>' if 'dnbr6.png' in r['files'] else ''}
+{'<h2>Map</h2><p><img src="dnbr6.png" alt="Burn severity classes" style="max-width:100%;border:1px solid #ccc"></p><p class="note">Dark green unburned to low, aquamarine low, yellow moderate, red high, light green increased greenness, grey no data; black line: burned-area boundary' + (' (drafted)' if r.get('perimeter_draft') else '') + '.</p>' if 'dnbr6.png' in r['files'] else ''}
 {"<h2>Check</h2><ul>" + "".join(f"<li>{e(w)}</li>" for w in r["warnings"]) + "</ul>" if r["warnings"] else ""}
 <h2>Images</h2>
 <p>Pre-fire: {e(", ".join(pair["pre_granules"]))}<br>Post-fire: {e(", ".join(pair["post_granules"]))}<br>
@@ -397,4 +524,4 @@ code{{font-size:.85em}}.note{{color:#555}}</style></head><body>
 <p class="note">Estimated thresholds are a starting point: on 17 MTBS fires they reproduce MTBS's classes at kappa about 0.56,
 against 0.78 with MTBS's own thresholds. Check them against the imagery (reflectance_post.tif, SWIR2/NIR/red) and field data.</p>
 <h2>Files</h2><p>{"".join(f"<code>{e(n)}</code> " for n in r["files"])}</p>
-<p class="note">Full log and parameters: report.json.</p></body></html>'''
+<p class="note">Full log and inputs: report.json.</p></body></html>'''

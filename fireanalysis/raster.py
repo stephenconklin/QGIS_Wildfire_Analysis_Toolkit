@@ -31,7 +31,9 @@ def analysis_grid(aoi_4326, crs, buffer_m, pixel, transform_context):
     ncols, nrows = int(round((bounds[2] - bounds[0]) / pixel)), int(round((bounds[3] - bounds[1]) / pixel))
     if ncols * nrows > 40_000_000:
         raise QgsProcessingException(
-            f'The area is {ncols} x {nrows} pixels; that is too large. Use a smaller AOI or buffer.')
+            f'The area is {ncols} x {nrows} pixels ({ncols * pixel / 1000:,.0f} x {nrows * pixel / 1000:,.0f} km); '
+            'that is too large. Use a smaller area of interest or buffer: the fire\'s polygons, not image '
+            'footprints or a region.')
     return crs, bounds, ncols, nrows
 
 
