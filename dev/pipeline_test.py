@@ -574,6 +574,34 @@ if details is not None and details.postProcessor() is not None:
 check(f"classify: loaded classes get the MTBS palette (renderer {styled})", styled == "paletted",
       " | ".join(fb.log[-3:]))
 
+
+def corner_alpha(layer):
+    """Alpha of the rendered top-left corner, outside the test burned area (class 0)."""
+    from qgis.core import QgsMapRendererParallelJob, QgsMapSettings
+    from qgis.PyQt.QtCore import QSize
+    from qgis.PyQt.QtGui import QColor
+    ms = QgsMapSettings()
+    ms.setLayers([layer])
+    ms.setDestinationCrs(layer.crs())
+    ms.setExtent(layer.extent())
+    ms.setOutputSize(QSize(100, 100))
+    ms.setBackgroundColor(QColor(0, 0, 0, 0))
+    job = QgsMapRendererParallelJob(ms)
+    job.start()
+    job.waitForFinished()
+    return QColor.fromRgba(job.renderedImage().pixel(1, 1)).alpha()  # QColor(int) would drop the alpha
+
+
+if styled:
+    from fireanalysis import styles as _styles  # noqa: E402
+    by_style = QgsRasterLayer(out_path, "classes")
+    _styles.mtbs_classes(by_style)
+    by_qml = QgsRasterLayer(out_path, "classes")
+    by_qml.loadNamedStyle(os.path.splitext(out_path)[0] + ".qml")
+    a_style, a_qml = corner_alpha(by_style), corner_alpha(by_qml)
+    check(f"classes: outside the burned area is transparent (alpha {a_style} styled, {a_qml} from the .qml)",
+          a_style == 0 and a_qml == 0)
+
 # 16. Pipeline results load into one styled group per run; a rerun into the same folder reuses it
 import shutil  # noqa: E402
 try:
@@ -587,7 +615,13 @@ if handleAlgorithmResults is not None and os.path.exists(out_path):
         shutil.copy(src, os.path.join(run, dst))
     project = QgsProject.instance()
     groups = []
-    for _ in range(2):
+    for i in range(2):
+        if i == 1:  # scramble the order and visibility, as an earlier version or the user might leave them
+            g = project.layerTreeRoot().findGroup("Test fire " + datetime.date.today().isoformat())
+            first = g.children()[0]
+            g.addChildNode(first.clone())
+            g.removeChildNode(first)
+            g.findLayers()[0].setItemVisibilityChecked(True)
         alg = BurnSeverityPipeline()
         alg.initAlgorithm()
         ctx = QgsProcessingContext()
@@ -596,7 +630,7 @@ if handleAlgorithmResults is not None and os.path.exists(out_path):
         handleAlgorithmResults(alg, ctx, QgsProcessingFeedback(), {})
         groups = [g for g in project.layerTreeRoot().findGroups(True) if g.name().startswith("Test fire")]
     nodes = groups[0].findLayers() if groups else []
-    got = [(n.layer().name(), n.isVisible(), n.layer().renderer().type()) for n in nodes]
+    got = [(n.layer().name(), n.itemVisibilityChecked(), n.layer().renderer().type()) for n in nodes]
     want = [("Severity classes (MTBS)", True, "paletted"),
             ("dNBR (thresholds 0.100 / 0.270 / 0.660)", False, "singlebandpseudocolor"),
             ("Pre-fire NBR", False, "singlebandgray")]
@@ -605,6 +639,73 @@ if handleAlgorithmResults is not None and os.path.exists(out_path):
     for g in groups:
         project.removeMapLayers([n.layerId() for n in g.findLayers()])
         g.parent().removeChildNode(g)
+
+# 17. The dNBR offset: the draft threshold is above it, and nearby MTBS thresholds move with it
+from fireanalysis import mtbs as mtbs_service  # noqa: E402
+from qgis.core import QgsCoordinateReferenceSystem  # noqa: E402
+fires = [{"fire_id": str(i), "asmnt_type": "Initial", "dnbr_offst": o, "low_threshold": 100 + o,
+          "moderate_threshold": 300 + o, "high_threshold": 600 + o} for i, o in enumerate((-30, -10, 0, 20, 40))]
+raw_t = mtbs_service.median_thresholds(fires, "Initial")[0]
+adj_t = mtbs_service.median_thresholds(fires, "Initial", offset=0.105)[0]
+check(f"nearby thresholds relative to each fire's offset, at this pair's ({[round(x, 3) for x in adj_t]})",
+      [round(x, 3) for x in raw_t] == [0.1, 0.3, 0.6] and [round(x, 3) for x in adj_t] == [0.205, 0.405, 0.705])
+
+# A synthetic dNBR whose unburned land reads 0.1 (offset in the metadata, as Build dNBR writes it),
+# with a large burn and a small separate one
+grid = np.full((200, 200), 0.1, dtype=np.float32)
+grid[20:120, 20:120] = 0.5   # 100 x 100 px = 900 ha
+grid[150:175, 150:175] = 0.5  # 25 x 25 px = 56 ha, 6 % of the large one
+path = os.path.join(OUT, "offset_dnbr.tif")
+ds = gdal.GetDriverByName("GTiff").Create(path, 200, 200, 1, gdal.GDT_Float32)
+ds.SetGeoTransform((400000, 30, 0, 4000000, 0, -30))
+ds.SetProjection(QgsCoordinateReferenceSystem("EPSG:26912").toWkt())
+ds.GetRasterBand(1).WriteArray(grid)
+ds.GetRasterBand(1).SetNoDataValue(-9999)
+ds.SetMetadata({"DNBR_OFFSET": "0.100000"})
+ds = None
+for label, extra, want_ha in (("threshold above the metadata offset", {}, 956),
+                              ("keep patches of at least 25 % of the largest", {"KEEP_SHARE": 25}, 900),
+                              ("offset given as 0: everything burned", {"OFFSET": 0.0}, 3600)):
+    res, log = _run(DraftPerimeter(), dict({"DNBR": path, "OUTPUT": os.path.join(OUT, "draft_off.gpkg")}, **extra))
+    area = next(QgsVectorLayer(os.path.join(OUT, "draft_off.gpkg"), "d", "ogr").getFeatures())["area_ha"] if res else 0
+    check(f"draft: {label} ({area:,.0f} ha, want {want_ha:,})", res is not None and abs(area - want_ha) < 15,
+          " | ".join(log[-3:]))
+
+# 18. Report: a "selected features only" input names its layer; zone names, image dates, threshold note
+from qgis.core import QgsProcessingFeatureSourceDefinition  # noqa: E402
+from fireanalysis.algorithms.burn_severity_pipeline import _html  # noqa: E402
+sel = QgsVectorLayer(BURN, "burn_area", "ogr")
+QgsProject.instance().addMapLayer(sel)
+sel.selectByIds([next(sel.getFeatures()).id()])
+pipe = BurnSeverityPipeline()
+pipe.initAlgorithm()
+ctx = QgsProcessingContext()
+ctx.setProject(QgsProject.instance())
+info = pipe._layer_info({"PERIMETER": QgsProcessingFeatureSourceDefinition(sel.id(), True)}, "PERIMETER", ctx)
+check("report: a selected-features input shows its layer name and file",
+      info["layer"] == "burn_area" and "testdata.gpkg" in info["source"] and info["selected_only"] and info["features"] == 1,
+      str(info))
+QgsProject.instance().removeMapLayer(sel.id())
+fields = ["ord", "sev_class", "pct_db", "pct_ba", "ha_db", "ha_ba", "ac_db", "ac_ba"]
+rows = [{"ord": 1, "sev_class": "Low", "pct_db": 60.0, "pct_ba": 55.0, "ha_db": 10.0, "ha_ba": 5.0, "ac_db": 25.0,
+         "ac_ba": 12.0}]
+rep = {"fire": "Test", "fire_start": "2025-07-04", "fire_end": "2025-09-01", "assessment": "Initial (soon after)",
+       "fireanalysis_version": "x", "created": "now", "imagery": "HLS", "files": [], "warnings": [],
+       "zones": {"db": "Test fire", "ba": "Bright Angel"},
+       "pair": {"pre_date": "2024-09-12", "pre_sensor": "L30", "pre_clear": "100", "post_date": "2025-09-15",
+                "post_sensor": "L30", "post_clear": "99.5", "doy_gap": "3", "years": "1", "source": "suggested",
+                "pre_granules": ["a"], "post_granules": ["b"]},
+       "offset": {"value": 0.01, "std": 0.02, "pixels": 100, "method": "ring"},
+       "thresholds": {"low": 0.1, "moderate": 0.27, "high": 0.66, "notes": []},
+       "inputs": {"thresholds_given": {}}}
+page = _html(rep, fields, rows)
+check("report: zone names, not field codes, in the chart and table; the pair's dates",
+      "<b>Bright Angel</b>" in page and "<th>% Test fire</th>" in page and "<th>acres Bright Angel</th>" in page
+      and "pct_db" not in page and "Pre-fire 2024-09-12 (L30" in page and "1 year apart, 3 days apart" in page)
+rep["inputs"]["thresholds_given"] = {"low_t": 0.1, "moderate_t": 0.27, "high_t": 0.66}
+check("report: the estimated-threshold note only when a threshold was estimated",
+      "Estimated thresholds are a starting point" in _html(dict(rep, inputs={"thresholds_given": {}}), fields, rows)
+      and "Estimated thresholds are a starting point" not in _html(rep, fields, rows))
 
 print(f"\n{'ALL PASSED' if not failed else f'{failed} FAILED'}")
 if _app is not None:

@@ -238,6 +238,10 @@ if len(granule_ids) == 2:
         check("pipeline: report lists the clipped-perimeter warning",
               any("looks burned" in w for w in rep["warnings"]), str(rep["warnings"]))
         inputs = rep.get("inputs") or {}
+        page = open(os.path.join(folder, "report.html"), encoding="utf-8").read()
+        check("pipeline: report labels the zones by name (Dragon Bravo, Bright Angel), not by field code",
+              rep.get("zones") == {"db": "Dragon Bravo", "ba": "Bright Angel"} and "<b>Bright Angel</b>" in page
+              and "pct_db" not in page, str(rep.get("zones")))
         check("pipeline: report names the perimeter and sub-area layers, with the perimeter's area",
               "burn_area" in (inputs.get("perimeter") or {}).get("source", "")
               and (inputs["perimeter"].get("area_ha") or 0) > 0

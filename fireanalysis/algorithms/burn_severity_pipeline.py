@@ -57,6 +57,7 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
     PERIMETER_MODE = 'PERIMETER_MODE'
     DRAFT_THRESHOLD = 'DRAFT_THRESHOLD'
     DRAFT_MIN_AREA = 'DRAFT_MIN_AREA'
+    DRAFT_KEEP_SHARE = 'DRAFT_KEEP_SHARE'
     FIRE_NAME = 'FIRE_NAME'
     FIRE_START = 'FIRE_START'
     FIRE_END = 'FIRE_END'
@@ -163,10 +164,14 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
         self.addParameter(advanced(QgsProcessingParameterString(
             self.POST_GRANULES, 'Post-fire granule or item ids (instead of suggesting a pair)', optional=True)))
         self.addParameter(advanced(QgsProcessingParameterNumber(
-            self.DRAFT_THRESHOLD, 'Drafted burned area: dNBR of at least', type=double_type(), defaultValue=0.05)))
+            self.DRAFT_THRESHOLD, 'Drafted burned area: dNBR of at least this above the offset', type=double_type(),
+            defaultValue=0.05)))
         self.addParameter(advanced(QgsProcessingParameterNumber(
             self.DRAFT_MIN_AREA, 'Drafted burned area: smallest patch kept (ha)', type=double_type(), minValue=0,
             defaultValue=20)))
+        self.addParameter(advanced(QgsProcessingParameterNumber(
+            self.DRAFT_KEEP_SHARE, 'Drafted burned area: keep patches of at least this share of the largest (%)',
+            type=double_type(), minValue=0, maxValue=100, defaultValue=25)))
         self.addParameter(advanced(QgsProcessingParameterNumber(
             self.MIN_CLEAR, 'Minimum clear share inside the area for a suggested pair (%)', type=integer_type(),
             minValue=0, maxValue=100, defaultValue=95)))
@@ -213,6 +218,9 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
             return None
         source = self.parameterAsSource(parameters, name, context)
         layer = self.parameterAsVectorLayer(parameters, name, context)
+        if layer is None and isinstance(value, QgsProcessingFeatureSourceDefinition):
+            # "Selected features only" wraps the layer: look it up by its id or source
+            layer = QgsProcessingUtils.mapLayerFromString(str(value.source.staticValue()), context)
         info = {'layer': layer.name() if layer else str(value),
                 'source': QgsDataSourceUri.removePassword(layer.source()) if layer else str(value),
                 'provider': layer.providerType() if layer else '',
@@ -357,8 +365,10 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
         if drafted:
             threshold = self.parameterAsDouble(parameters, self.DRAFT_THRESHOLD, context)
             min_area = self.parameterAsDouble(parameters, self.DRAFT_MIN_AREA, context)
+            keep_share = self.parameterAsDouble(parameters, self.DRAFT_KEEP_SHARE, context)
             res = self._child(DraftPerimeter(), {
-                'DNBR': dnbr, 'THRESHOLD': threshold, 'MIN_AREA': min_area, 'HOLE_AREA': DRAFT_HOLE_HA, 'SEED': perimeter, 'CLIP': True,
+                'DNBR': dnbr, 'THRESHOLD': threshold, 'MIN_AREA': min_area, 'HOLE_AREA': DRAFT_HOLE_HA,
+                'SEED': perimeter, 'CLIP': True, 'KEEP_SHARE': keep_share, 'OFFSET': report['offset']['value'],
                 'OUTPUT': os.path.join(folder, 'perimeter_draft.gpkg')}, context, steps, log)
             layer = QgsProcessingUtils.mapLayerFromString(res['OUTPUT'], context) \
                 or QgsVectorLayer(res['OUTPUT'], 'perimeter_draft', 'ogr')
@@ -371,7 +381,8 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
             info = _area(geom, crs, context)
             outline_ha = report['inputs']['perimeter']['area_ha']
             report['perimeter_draft'] = {
-                'file': 'perimeter_draft.gpkg', 'threshold': threshold, 'min_area_ha': min_area,
+                'file': 'perimeter_draft.gpkg', 'threshold': threshold, 'offset': report['offset']['value'],
+                'keep_share': keep_share, 'min_area_ha': min_area,
                 'hole_area_ha': DRAFT_HOLE_HA, 'area_ha': info['area_ha'], 'area_ac': info['area_ac'],
                 'share_of_outline': 100.0 * info['area_ha'] / outline_ha if outline_ha else None}
             feedback.pushInfo(f'Drafted burned area: {info["area_ha"]:,.0f} ha ({info["area_ac"]:,.0f} ac), '
@@ -432,6 +443,12 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
         for f in layer.getFeatures():
             rows.append({n: f[n] for n in fields})
         report['summary'] = rows
+        zones_layer = QgsProcessingUtils.mapLayerFromString(res['ZONES'], context) \
+            or QgsVectorLayer(res['ZONES'], 'zones', 'ogr')
+        names = [str(f['zone']) for f in zones_layer.getFeatures()] if zones_layer and zones_layer.isValid() else []
+        codes = [n[4:] for n in fields if n.startswith('pct_')]
+        # zone A first, then the sub-areas: the summary columns follow the same order
+        report['zones'] = dict(zip(codes, names)) if len(codes) == len(names) else {}
         with open(os.path.join(folder, 'summary.csv'), 'w', newline='', encoding='utf-8') as f:
             w = csv.writer(f)
             w.writerow(fields)
@@ -469,15 +486,16 @@ def _area(geom, crs, context):
     return {'area_ha': area / 1e4, 'area_ac': area / 4046.8564224}
 
 
-def _chart(fields, rows):
-    """Horizontal bars of percent per class for each zone, in plain HTML."""
+def _chart(fields, rows, names=None):
+    """Horizontal bars of percent per class for each zone, in plain HTML; names maps
+    a field code (pct_<code>) to the zone's name."""
     e = html.escape
     zones = [n for n in fields if n.startswith('pct_')]
     colours = {'Unburned to low': CLASS_COLORS[1], 'Low': CLASS_COLORS[2], 'Moderate': CLASS_COLORS[3],
                'High': CLASS_COLORS[4]}
     out = ['<div style="margin:.5rem 0 1rem">']
     for z in zones:
-        out.append(f'<div style="margin:.4rem 0 .2rem"><b>{e(z[4:])}</b></div>')
+        out.append(f'<div style="margin:.4rem 0 .2rem"><b>{e((names or {}).get(z[4:], z[4:]))}</b></div>')
         for row in rows:
             v = float(row[z] or 0)
             colour = colours.get(str(row['sev_class']), '#888')
@@ -534,8 +552,9 @@ def _inputs_html(r):
     d = r.get('perimeter_draft')
     if d:
         out = [f'<h2>Inputs</h2><p>Burned area: <b>drafted from dNBR</b>, {d["area_ha"]:,.0f} ha ({d["area_ac"]:,.0f} ac), '
-               f'{d["share_of_outline"]:.0f} % of the outline; dNBR at least {d["threshold"]:g}, patches of '
-               f'{d["min_area_ha"]:g} ha or more, holes up to {d["hole_area_ha"]:g} ha filled '
+               f'{d["share_of_outline"]:.0f} % of the outline; dNBR at least {d["threshold"]:g} above the offset '
+               f'({d.get("offset", 0) + d["threshold"]:.3f}), patches of {d["min_area_ha"]:g} ha or more and at least '
+               f'{d.get("keep_share", 0):g} % of the largest, holes up to {d["hole_area_ha"]:g} ha filled '
                f'(<code>{e(d["file"])}</code>). '
                '<span class="note">A draft: edit it against the imagery and rerun with it as given for a final '
                'assessment.</span></p>'
@@ -563,6 +582,35 @@ def _html(r, fields, rows):
             return f'{v:,.0f}' if n.startswith('ac_') else f'{v:,.2f}'
         return str(v)
     rows_html = ''.join('<tr>' + ''.join(f'<td>{e(cell(n, row[n]))}</td>' for n in fields) + '</tr>' for row in rows)
+    zones = r.get('zones') or {}
+
+    def head(n):
+        """Column header: the zone's name instead of the field code (pct_db -> % 416 Fire)."""
+        if n == 'ord':
+            return '#'
+        if n == 'sev_class':
+            return 'Class'
+        for prefix, label in (('pct_', '%'), ('ha_', 'ha'), ('ac_', 'acres')):
+            if n.startswith(prefix):
+                return f'{label} {zones.get(n[len(prefix):], n[len(prefix):])}'
+        return n
+    # 4. the pair's dates, sensors and clear shares, when the pair was suggested
+    dates = ''
+    if pair.get('pre_date'):
+        def n_of(v, unit):
+            return f'{v} {unit}' + ('' if str(v) == '1' else 's')
+        gap = (f'{n_of(pair["years"], "year")} apart, {n_of(pair["doy_gap"], "day")} apart in the season'
+               if pair.get('years') else '')
+        dates = (f'<p>Pre-fire {e(str(pair["pre_date"]))} ({e(str(pair["pre_sensor"]))}, {e(str(pair["pre_clear"]))} % clear '
+                 f'inside the area); post-fire {e(str(pair["post_date"]))} ({e(str(pair["post_sensor"]))}, '
+                 f'{e(str(pair["post_clear"]))} % clear){"; " + gap if gap else ""}.</p>')
+    # 3. the validation note only when a threshold was estimated
+    given = (r.get('inputs') or {}).get('thresholds_given') or {}
+    estimated_note = '' if len(given) == 3 else (
+        '<p class="note">Estimated thresholds are a starting point: on 21 MTBS fires the nearby-fire estimate '
+        '(moved to each pair\'s offset) reproduces MTBS\'s classes at a mean kappa of about 0.61, against 0.75 with '
+        'MTBS\'s own thresholds. Check them against the imagery (reflectance_post.tif, SWIR2/NIR/red) and field '
+        'data.</p>')
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>{e(r["fire"])} burn severity</title>
 <style>body{{font:15px/1.5 system-ui,sans-serif;max-width:52rem;margin:2rem auto;padding:0 1rem;color:#222;background:#fff}}
@@ -573,12 +621,12 @@ code{{font-size:.85em}}.note{{color:#555}}</style></head><body>
 <p>Fire {e(r["fire_start"])} to {e(r["fire_end"])}, {e(_lower_first(r["assessment"]))}. Wildfire Analysis Toolkit {e(r["fireanalysis_version"])}, {e(r["created"])}.</p>
 {_inputs_html(r)}
 <h2>Severity by class</h2>
-{_chart(fields, rows)}
-<table><tr>{"".join(f"<th>{e(n)}</th>" for n in fields)}</tr>{rows_html}</table>
+{_chart(fields, rows, zones)}
+<table><tr>{"".join(f"<th>{e(head(n))}</th>" for n in fields)}</tr>{rows_html}</table>
 {'<h2>Map</h2><p><img src="dnbr6.png" alt="Burn severity classes" style="max-width:100%;border:1px solid #ccc"></p><p class="note">Dark green unburned to low, aquamarine low, yellow moderate, red high, light green increased greenness, grey no data; black line: burned-area boundary' + (' (drafted)' if r.get('perimeter_draft') else '') + '.</p>' if 'dnbr6.png' in r['files'] else ''}
 {"<h2>Check</h2><ul>" + "".join(f"<li>{e(w)}</li>" for w in r["warnings"]) + "</ul>" if r["warnings"] else ""}
 <h2>Images</h2>
-<p>Pre-fire: {e(", ".join(pair["pre_granules"]))}<br>Post-fire: {e(", ".join(pair["post_granules"]))}<br>
+{dates}<p>Pre-fire: {e(", ".join(pair["pre_granules"]))}<br>Post-fire: {e(", ".join(pair["post_granules"]))}<br>
 <span class="note">{e(pair["source"])}. {e(r["imagery"])}; calibrated to surface reflectance from the product metadata; cloud, adjacent cloud, shadow, snow and water masked.</span></p>
 <h2>dNBR offset and thresholds</h2>
 <p>Offset {r["offset"]["value"]:.3f} (standard deviation {r["offset"]["std"]:.3f}, {r["offset"]["pixels"]:,} pixels; {e(r["offset"]["method"])}).</p>
@@ -587,7 +635,6 @@ code{{font-size:.85em}}.note{{color:#555}}</style></head><body>
 {(f"<p>Cross-check, {e(_lower_first(t['alternative']['method']))}: low {thr(t['alternative']['low'])}, "
   f"moderate {thr(t['alternative']['moderate'])}, high {thr(t['alternative']['high'])}.</p>")
  if 'alternative' in t and 'low' in t['alternative'] else ''}
-<p class="note">Estimated thresholds are a starting point: on 17 MTBS fires they reproduce MTBS's classes at kappa about 0.56,
-against 0.78 with MTBS's own thresholds. Check them against the imagery (reflectance_post.tif, SWIR2/NIR/red) and field data.</p>
+{estimated_note}
 <h2>Files</h2><p>{"".join(f"<code>{e(n)}</code> " for n in r["files"])}</p>
 <p class="note">Full log and inputs: report.json.</p></body></html>'''

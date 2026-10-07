@@ -23,7 +23,8 @@ def _stretch():
 
 
 def mtbs_classes(layer):
-    """The MTBS dnbr6 palette."""
+    """The MTBS dnbr6 palette. Class 0 (outside the burned area) is not in the palette,
+    so it is drawn transparent."""
     from .algorithms.classify_severity import CLASS_COLORS, CLASS_NAMES
     classes = [QgsPalettedRasterRenderer.Class(v, QColor(CLASS_COLORS[v]), CLASS_NAMES[v]) for v in sorted(CLASS_NAMES)]
     layer.setRenderer(QgsPalettedRasterRenderer(layer.dataProvider(), 1, classes))
@@ -98,9 +99,9 @@ class StyleOnLoad(QgsProcessingLayerPostProcessorInterface):
     file name), and optionally switches the layer off in the layer tree."""
     keep = []  # QGIS holds only a pointer: keep the Python objects alive
 
-    def __init__(self, style, visible=True, name=None):
+    def __init__(self, style, visible=True, name=None, sort_key=None):
         super().__init__()
-        self.style, self.visible, self.name = style, visible, name
+        self.style, self.visible, self.name, self.sort_key = style, visible, name, sort_key
 
     def postProcessLayer(self, layer, context, feedback):
         if layer is None or not layer.isValid():
@@ -113,11 +114,33 @@ class StyleOnLoad(QgsProcessingLayerPostProcessorInterface):
             layer.triggerRepaint()
         except Exception as e:  # a style must never fail the run
             feedback.pushInfo(f'Could not style {layer.name()}: {e}')
-        if not self.visible:
-            project = context.project() or QgsProject.instance()
-            node = project.layerTreeRoot().findLayer(layer.id())
-            if node is not None:
-                node.setItemVisibilityChecked(False)
+        project = context.project() or QgsProject.instance()
+        node = project.layerTreeRoot().findLayer(layer.id())
+        if node is None:
+            return
+        node.setItemVisibilityChecked(self.visible)
+        if self.sort_key is not None:
+            node.setCustomProperty(SORT_PROPERTY, self.sort_key)
+            _sort_group(node.parent())
+
+
+SORT_PROPERTY = 'fireanalysis/sort_key'
+
+
+def _sort_group(group):
+    """Order a group's layers by their sort key, highest on top. QGIS sorts the layers
+    it adds, but a rerun reuses layers already loaded and leaves them where they were."""
+    if group is None:
+        return
+    nodes = list(group.children())
+    keyed = [n for n in nodes if n.customProperty(SORT_PROPERTY) is not None]
+    order = sorted(keyed, key=lambda n: -int(n.customProperty(SORT_PROPERTY)))
+    if [n for n in nodes if n in keyed] == order:
+        return
+    for i, n in enumerate(order):
+        clone = n.clone()
+        group.insertChildNode(i, clone)
+        group.removeChildNode(n)
 
 
 def load_on_completion(context, path, name, style=None, visible=True, group='', sort_key=0, vector=False):
@@ -130,7 +153,7 @@ def load_on_completion(context, path, name, style=None, visible=True, group='', 
     details.groupName = group
     details.layerSortKey = sort_key
     context.addLayerToLoadOnCompletion(path, details)
-    post = StyleOnLoad(style or (lambda layer: None), visible, name)
+    post = StyleOnLoad(style or (lambda layer: None), visible, name, sort_key)
     StyleOnLoad.keep = StyleOnLoad.keep[-50:] + [post]
     context.layerToLoadOnCompletionDetails(path).setPostProcessor(post)
 

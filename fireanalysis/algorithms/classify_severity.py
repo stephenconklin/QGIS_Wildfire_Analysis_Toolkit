@@ -150,8 +150,10 @@ class ClassifySeverity(QgsProcessingAlgorithm):
             'estimate it:</p><ul>'
             '<li><b>Nearby MTBS fires</b> (default, online): the median low, moderate and high '
             'thresholds of MTBS-mapped wildfires within the radius over the past years (same '
-            'assessment type when there are at least 5), from the MTBS map service. Our dNBR is on '
-            'the MTBS scale, so their analysts\' choices carry over.</li>'
+            'assessment type when there are at least 5), from the MTBS map service. Each is taken '
+            'relative to that fire\'s MTBS offset and moved to this pair\'s offset (from the dNBR '
+            'metadata or the Offset option), so a pair whose unburned land reads 0.1 gets thresholds '
+            '0.1 higher. Our dNBR is on the MTBS scale, so their analysts\' choices carry over.</li>'
             '<li><b>This fire\'s data</b> (offline): low = offset + 2 robust standard deviations '
             'of the offset sample; high = the dNBR value whose pattern best matches RdNBR ≥ 750 '
             '(initial) or 640 (extended) where the pre-fire NBR is ≥ 0.5 (then 0.4, 0.3), since '
@@ -202,8 +204,9 @@ class ClassifySeverity(QgsProcessingAlgorithm):
             return None
         return self.parameterAsDouble(parameters, name, context)
 
-    def _nearby(self, geom, crs, md, assessment, parameters, context, feedback):
-        """Median thresholds of MTBS wildfires near the burned area."""
+    def _nearby(self, geom, crs, md, assessment, parameters, context, feedback, offset):
+        """Median thresholds of MTBS wildfires near the burned area, each relative to its
+        own offset and moved to this pair's offset (offset: on this dNBR's scale)."""
         import datetime
         from qgis.core import QgsCoordinateReferenceSystem, QgsCoordinateTransform
         c = QgsGeometry(geom.centroid())
@@ -215,11 +218,13 @@ class ClassifySeverity(QgsProcessingAlgorithm):
         years = self.parameterAsInt(parameters, self.YEARS, context)
         fires = mtbs.nearby_fires(lon, lat, radius, year - years, year, feedback=feedback)
         kind = 'Extended' if assessment == EXTENDED else 'Initial'
-        thresholds, counts, n, scope = mtbs.median_thresholds(fires, kind)
+        thresholds, counts, n, scope = mtbs.median_thresholds(fires, kind, offset=offset)
         feedback.pushInfo(f'{n} MTBS wildfires within {radius:.0f} km, {year - years}-{year} ({scope}).')
         if n < MIN_NEARBY_FIRES:
             return [None] * 3, [''] * 3
-        notes = [f'median of {k} nearby MTBS fires' for k in counts]
+        notes = [f'median of {k} nearby MTBS fires' + ('' if offset is None else
+                                                        f', relative to their offsets, at this pair\'s offset {offset:+.3f}')
+                 for k in counts]
         return [round5(t) if t is not None else None for t in thresholds], notes
 
     @staticmethod
@@ -285,6 +290,7 @@ class ClassifySeverity(QgsProcessingAlgorithm):
             warn(feedback, 'This dNBR already has the offset subtracted; the MTBS thresholds are '
                            'usually set on uncorrected dNBR.')
         offset = self._number(parameters, self.OFFSET, context)
+        offset_known = offset is not None or 'DNBR_OFFSET' in md
         if offset is None:
             offset = float(md.get('DNBR_OFFSET', 0.0))
         offset_std = self._number(parameters, self.OFFSET_STD, context)
@@ -312,7 +318,10 @@ class ClassifySeverity(QgsProcessingAlgorithm):
             method = self.parameterAsEnum(parameters, self.ESTIMATE, context)
             if method == NEARBY:
                 try:
-                    estimated, notes = self._nearby(geom, crs, md, assessment, parameters, context, feedback)
+                    # thresholds sit on this dNBR: its offset is 0 once subtracted
+                    pair_offset = (0.0 if md.get('DNBR_OFFSET_SUBTRACTED') == 'YES' else offset) if offset_known else None
+                    estimated, notes = self._nearby(geom, crs, md, assessment, parameters, context, feedback,
+                                                    pair_offset)
                 except mtbs.MtbsError as e:
                     warn(feedback, f'{e}. Using this fire\'s own data instead.')
                     method = OWN_DATA
