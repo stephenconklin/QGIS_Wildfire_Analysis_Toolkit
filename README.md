@@ -59,9 +59,11 @@ It picks an image pair, fetches both dates, and writes dNBR, the MTBS classes, t
 
 Version 2.0 grows the plugin into a fire analysis pipeline modeled on the MTBS [QGIS Fire Mapping Tool](https://www.mtbs.gov/qgis-fire-mapping-tool) (plan: [docs/DESIGN.md](docs/DESIGN.md)). Each step is a Processing algorithm, so the chain also runs in models, batch mode and `processing.run`:
 
-1. **Imagery.** *Find HLS scenes* and *Fetch HLS NBR* get calibrated, cloud-masked NBR from NASA's [Harmonized Landsat Sentinel-2](https://hls.gsfc.nasa.gov/) (HLS v2.0) archive, for just the area of interest. *Prepare local scene NBR* does the same for Landsat or Sentinel-2 files you downloaded.
-2. **Severity.** *Build dNBR* makes dNBR, RdNBR and RBR and measures the unburned offset. *Classify severity (MTBS classes)* writes the MTBS thematic classes.
-3. **Summary.** *Burn severity summary* (above) reports percent, hectares and acres per class and zone.
+1. **Imagery** (group Imagery). *Suggest image pairs* picks pre- and post-fire dates by the MTBS rules. *Find HLS scenes* and *Fetch HLS NBR* get calibrated, cloud-masked NBR from NASA's [Harmonized Landsat Sentinel-2](https://hls.gsfc.nasa.gov/) (HLS v2.0) archive, for just the area of interest; *Find / Fetch Landsat / Sentinel-2* do the same from Microsoft Planetary Computer (Landsat back to 1982); *Prepare local scene NBR* does it for Landsat or Sentinel-2 files you downloaded. All write NBR on the same grid.
+2. **Severity** (group Severity). *Build dNBR* makes dNBR, RdNBR and RBR and measures the unburned offset. *Draft burned-area perimeter* drafts the burned area from dNBR when there is no perimeter. *Classify severity (MTBS classes)* writes the MTBS thematic classes, with given or estimated thresholds.
+3. **Summary and map.** *Burn severity summary* (above) reports percent, hectares and acres per class and zone. *Severity map (PDF)* (group Pipeline) lays out the classes as an A4 map.
+
+**Burn severity (whole pipeline)** (group Pipeline) runs steps 1 to 3, except the map, in one go and writes a report.
 
 Checked against 17 published MTBS fires: the imagery and calibration reproduce MTBS's classes (mean kappa 0.78); threshold estimates are a starting point (see *Validation against MTBS* below).
 
@@ -81,15 +83,26 @@ Checked against 17 published MTBS fires: the imagery and calibration reproduce M
 | Estimate empty thresholds from; Low, Moderate, High threshold | As in *Classify severity*. |
 | Pre-fire, Post-fire granule or item ids (Advanced) | Skip the pair search and use these. |
 | Drafted burned area: dNBR of at least, smallest patch kept (Advanced) | 0.05 and 20 ha, the best settings in the perimeter study. |
+| Minimum clear share inside the area for a suggested pair (Advanced) | Default 95 %. Lower it when no pair is found for a cloudy area. |
 | Output folder | Where everything goes. |
 
-Steps: *Suggest image pairs* (rank 1; all candidates in `image_pairs.csv`), *Fetch HLS NBR* or *Fetch Landsat / Sentinel-2 NBR* for both dates, *Build dNBR* (ring offset), *Classify severity*, *Burn severity summary* with the classification's thresholds. The folder holds `nbr_pre.tif`, `nbr_post.tif`, `reflectance_post.tif` (SWIR2/NIR/red, for checking the classes), `dnbr.tif`, `rdnbr.tif`, `rbr.tif`, `dnbr6.tif` with its MTBS style, `summary.gpkg` and `summary.csv`, zones and histogram, `dnbr6.png` (the classes with the burned-area outline), and `report.html` (with a bar chart and the map) and `report.json`: the input layers (source, feature count, burned-area size in hectares and acres; flagged when temporary or selected features only), scenes, calibration, offset, thresholds and how they were chosen, the other estimate method's thresholds as a cross-check, every warning, and the summary. When the two threshold estimates disagree on the high threshold by more than 0.1, the report says so. The dNBR and the classes load into the project when it finishes.
+Steps: *Suggest image pairs* (rank 1; all candidates in `image_pairs.csv`), *Fetch HLS NBR* or *Fetch Landsat / Sentinel-2 NBR* for both dates, *Build dNBR* (ring offset), *Draft burned-area perimeter* (only when the burned area is drafted), *Classify severity*, *Burn severity summary* with the classification's thresholds. The folder holds `nbr_pre.tif`, `nbr_post.tif`, `reflectance_post.tif` (SWIR2/NIR/red, for checking the classes), `dnbr.tif`, `rdnbr.tif`, `rbr.tif`, `dnbr6.tif` with its MTBS style, `perimeter_draft.gpkg` (when drafted), `summary.gpkg` and `summary.csv`, zones and histogram, `dnbr6.png` (the classes with the burned-area outline), and `report.html` (with a bar chart and the map) and `report.json`: the input layers (source, feature count, burned-area size in hectares and acres; flagged when temporary or selected features only), scenes, calibration, offset, thresholds and how they were chosen, the other estimate method's thresholds as a cross-check, every warning, and the summary. When the two threshold estimates disagree on the high threshold by more than 0.1, the report says so. The dNBR and the classes load into the project when it finishes.
 
 **Where the perimeter comes from.** The polygons do three jobs: they set the imagery window (with a 3 km buffer), the unburned ring for the dNBR offset (90–2090 m outside them), and the burned area that is classified and summarized. A generous hand-drawn outline is fine for the first two but inflates *Unburned to low* in the third. The best burned area is an official perimeter (MTBS once published, otherwise the NIFC/WFIGS interagency final perimeter or a BAER/RAVG perimeter), saved to a file. When there is none, set *Burned area* to *Drafted from dNBR inside the given polygons* and give a generous outline around the whole fire: the outline still sets the imagery window and the offset ring, and *Draft burned-area perimeter* (dNBR ≥ 0.05, patches ≥ 20 ha, holes ≤ 2 ha filled, clipped to the outline) becomes the burned area, saved as `perimeter_draft.gpkg`. The report gives its size and its share of the outline. The draft is a starting point (mean IoU 0.69–0.73 against MTBS perimeters): edit it against `reflectance_post.tif` and rerun with it as given, with the granule ids from the report, for a final assessment.
 
 With the granule ids given it takes under a minute for the Dragon Bravo test area; the pair search adds about a minute and a half. For a historical fire, choose Landsat: for the Schultz Fire (2010, extended assessment) it picked Landsat 5 on 2011-06-13, the post-fire scene MTBS used, and a pre-fire scene a month from MTBS's, in 48 seconds.
 
 **Severity map (PDF)** (`fireanalysis:severitymap`, also under **Pipeline**) turns the result into an A4 landscape map: the classes in MTBS colors, the burned-area outline, optional sub-areas, legend, scale bar, north arrow, the summary table, and a note of the images, thresholds and offset read from the raster's metadata, as PDF and optionally PNG. Give it `dnbr6.tif`, the burned-area polygons, the sub-areas and `summary.gpkg` from the pipeline folder. It builds the layout in a separate project, so your project is not changed. QGIS layouts must be drawn on the main thread, so QGIS waits while it runs (a few seconds); that is also why the pipeline does not make the map itself.
+
+| Parameter | Description |
+|---|---|
+| Severity classes (dnbr6) | `dnbr6.tif` from the pipeline or *Classify severity*. Its metadata supplies the note of images, offset and thresholds. |
+| Burned-area polygons | Drawn as a black outline. Use `perimeter_draft.gpkg` for a drafted run. |
+| Sub-area polygons (optional) | Drawn as a dashed blue outline. |
+| Severity area summary table (optional) | `summary.gpkg`; shown as a table on the map. |
+| Title | Default *Burn severity*. |
+| Extra note (optional) | Free text added below the provenance note, such as the analyst or a caveat. |
+| Map (PDF), Map (PNG) | The PDF is required; the PNG is optional. |
 
 ### Imagery
 
@@ -106,6 +119,21 @@ With the granule ids given it takes under a minute for the Dragon Bravo test are
 Output: one footprint per granule with `granule`, `sensor`, `tile`, `date`, `doy`, `cloud` (scene %), `aoi_pct` (share of the AOI inside the footprint), and, when measured, `aoi_clear` and `aoi_data`: the share of the AOI that is clear (no cloud, adjacent cloud, shadow or snow) and that has data on that date, all tiles together. Tile-wide cloud cover says little about a small fire; `aoi_clear` is what matters.
 
 **Suggest image pairs** (`fireanalysis:suggestimagepairs`) chooses the dates for you, from HLS or (Imagery parameter) Planetary Computer Landsat or Sentinel-2, following the MTBS rules: post-fire dates soon after the fire (initial assessment, default up to 60 days after it ends) or in the next growing season (extended, June to September of the following year); pre-fire dates in the same season (default within 30 days of year) in the 1 to 2 years before. Both must be at least 95 % clear inside the area (default). It returns a ranked table (`rank`, `source`, `pre_date`, `pre_sensor`, `pre_clear`, `post_date`, `post_sensor`, `post_clear`, `doy_gap`, `years`, `pre_granules`, `post_granules`), ranked by the season gap in 5-day steps, then fewer years apart, then the clearer pair, then the earliest post-fire date. Copy `pre_granules` and `post_granules` into *Fetch HLS NBR* or *Fetch Landsat / Sentinel-2 NBR*. It reads Fmask for every candidate date, six at a time: about 1.5 minutes for the 120 candidate dates around Dragon Bravo, where the Lab 6 pair (Sentinel-2 2024-09-13, Landsat 9 2025-09-15) ranks second.
+
+| Parameter | Description |
+|---|---|
+| Imagery | NASA HLS (default), or Landsat 4–9 or Sentinel-2 from Planetary Computer. |
+| Burned area or area of interest | The fire's polygons. The clear share is measured inside them. |
+| Fire start, Fire end | Ignition and containment dates. |
+| Assessment | Initial (soon after the fire) or extended (next growing season). |
+| HLS sensors | L30, S30 or both (HLS only). |
+| Minimum clear share inside the area (%) | Default 95. Dates below it are not paired. |
+| Pre-fire: days of year from the post-fire date | Default 30. How far apart in the season the two dates may be. |
+| Pre-fire: years before the fire to search | Default 2. |
+| Initial assessment: days after the fire end to search | Default 60. |
+| Pairs to list | Default 10. |
+
+When no pre-fire date is close enough in the season, the log says so: raise the days of year or the years, or lower the clear share.
 
 **Fetch HLS NBR** (`fireanalysis:fetchhlsnbr`) reads only the AOI window of the chosen granules, mosaics their tiles, masks clouds and writes NBR.
 
@@ -127,7 +155,7 @@ Output: one footprint per granule with `granule`, `sensor`, `tile`, `date`, `doy
 
 The grid is snapped to whole 30 m pixels in the target CRS, so a pre-fire and a post-fire run with the same AOI and CRS line up exactly.
 
-**Find Landsat / Sentinel-2 scenes** and **Fetch Landsat / Sentinel-2 NBR** (`fireanalysis:findplanetaryscenes`, `fireanalysis:fetchplanetarynbr`) do the same from [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/), which needs no account: Landsat Collection 2 Level-2 from Landsat 4 to 9 (1982 on), the product MTBS itself uses, and Sentinel-2 L2A (20 m bands; set the pixel size to 20). Use them for fires before HLS (2013) or when you want the exact Landsat scene MTBS used. Find takes the AOI, dates, imagery (Landsat or Sentinel-2), maximum scene cloud cover and, optionally, the clear share inside the AOI from QA_PIXEL or SCL; its fields are `item`, `collection`, `platform`, `scene` (path/row or tile), `date`, `doy`, `cloud`, `aoi_pct`, `aoi_clear`, `aoi_data`. Fetch takes the scenes layer (or item ids), buffer, target CRS, pixel size and mask classes, and writes NBR (and optionally the reflectance stack) on the same grid as the other imagery algorithms. Calibration comes from the STAC item: Landsat DN × 0.0000275 − 0.2; Sentinel-2 (DN − 1000) / 10,000 for processing baseline 04.00 and later. For Cerro Pelado 2022, Planetary Computer Landsat 8 gives classes that agree with MTBS at kappa 0.746 (HLS: 0.723), and its dNBR correlates with HLS at r = 0.991.
+**Find Landsat / Sentinel-2 scenes** and **Fetch Landsat / Sentinel-2 NBR** (`fireanalysis:findplanetaryscenes`, `fireanalysis:fetchplanetarynbr`) do the same from [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/), which needs no account: Landsat Collection 2 Level-2 from Landsat 4 to 9 (1982 on), the product MTBS itself uses, and Sentinel-2 L2A (20 m bands; set the pixel size to 20). Use them for fires before HLS (2013) or when you want the exact Landsat scene MTBS used. Find takes the AOI, dates, imagery (Landsat or Sentinel-2), maximum scene cloud cover and, optionally, the clear share inside the AOI from QA_PIXEL or SCL; its fields are `item`, `collection`, `platform`, `scene` (path/row or tile), `date`, `doy`, `cloud`, `aoi_pct`, `aoi_clear`, `aoi_data`. Fetch takes the scenes layer, or item ids separated by spaces with *Imagery (for item ids)* set to Landsat or Sentinel-2, plus the buffer, target CRS, pixel size and mask classes, and writes NBR (and optionally the reflectance stack) on the same grid as the other imagery algorithms. Calibration comes from the STAC item: Landsat DN × 0.0000275 − 0.2; Sentinel-2 (DN − 1000) / 10,000 for processing baseline 04.00 and later. For Cerro Pelado 2022, Planetary Computer Landsat 8 gives classes that agree with MTBS at kappa 0.746 (HLS: 0.723), and its dNBR correlates with HLS at r = 0.991.
 
 **Prepare local scene NBR** (`fireanalysis:preparelocalnbr`) does the same for files you downloaded yourself: Landsat Collection 2 Level-2 (a scene or a US ARD tile; Landsat 4–9) or Sentinel-2 L2A. Use it for fires before 2013, for 20 m Sentinel-2, or when you already have the scenes. The output grid is the same one *Fetch HLS NBR* uses, so local and HLS NBR can be mixed.
 
@@ -168,6 +196,17 @@ For Dragon Bravo (HLS S30 2024-09-13 and L30 2025-09-15, full Lab 6 perimeter), 
 
 **Draft burned-area perimeter** (`fireanalysis:draftperimeter`) drafts burned-area polygons from dNBR when there is no perimeter yet: pixels at or above a dNBR threshold (default 0.05), patches smaller than 20 ha removed, unburned holes up to 2 ha filled. Optional seed polygons (a buffer around the ignition point, a rough outline) keep only the patches that touch them. MTBS analysts digitize perimeters by hand; this draft is for editing. Against the 18 MTBS perimeters in the validation set it reaches a mean intersection over union of 0.69 without a seed and 0.73 seeded with a 1 km circle around the MTBS fire location. The seed fails when that point is not in a burned patch, which happened twice (`dev/perimeter_study.py`).
 
+| Parameter | Description |
+|---|---|
+| dNBR (raw units) | From *Build dNBR*, in a projected CRS. |
+| Burned at dNBR of at least | Default 0.05. |
+| Smallest burned patch kept (ha) | Default 20. |
+| Largest unburned hole filled (ha) | Default 2. |
+| Seed polygons | Optional: keep only the burned patches that touch them. |
+| Clip to the seed polygons | Off by default. On, the result is also cut to the seed polygons: use it with a generous outline drawn around the whole fire (the pipeline does this when it drafts the burned area). |
+
+Output: one multipolygon with `area_ha` and the `threshold` used, in the dNBR's CRS. The log gives the area in hectares and acres.
+
 **Classify severity (MTBS classes)** (`fireanalysis:classifyseverity`) writes the MTBS thematic classes (`dnbr6`) inside the burned area: 1 unburned to low, 2 low, 3 moderate, 4 high, 5 increased greenness, 6 non-mapping (no data), 0 outside. A class starts at its threshold (dNBR ≥ threshold); increased greenness is dNBR ≤ −0.150. A `.qml` file next to the raster gives it the MTBS colors when QGIS loads it.
 
 | Parameter | Description |
@@ -177,7 +216,15 @@ For Dragon Bravo (HLS S30 2024-09-13 and L30 2025-09-15, full Lab 6 perimeter), 
 | Burned-area polygons | The area to classify. |
 | Assessment | Initial or extended. |
 | Low, Moderate, High threshold | Raw dNBR. Empty means estimate; 9.999 switches a class off. |
-| Estimate empty thresholds from | The median thresholds of MTBS wildfires within 150 km over the past 10 years (default; online; same assessment type when there are 5 or more), or this fire's own data: low = offset + 2 robust standard deviations of the offset sample, high = the dNBR value that best matches RdNBR ≥ 750 (initial) or 640 (extended) where the pre-fire NBR is at least 0.5, moderate midway. The radius and years are Advanced options. |
+| Estimate empty thresholds from | The median thresholds of MTBS wildfires within 150 km over the past 10 years (default; online; same assessment type when there are 5 or more), or this fire's own data: low = offset + 2 robust standard deviations of the offset sample, high = the dNBR value that best matches RdNBR ≥ 750 (initial) or 640 (extended) where the pre-fire NBR is at least 0.5, moderate midway. With too few nearby fires, or when the MTBS service can't be reached, it falls back to this fire's data and says so. |
+| Nearby MTBS fires: radius (km), years back (Advanced) | Default 150 km and 10 years. |
+| dNBR offset, Offset robust standard deviation (Advanced) | Used by the own-data estimate. Empty means read from the dNBR's metadata (written by *Build dNBR*); an offset of 0 when there is none. |
+| Increased-greenness threshold (Advanced) | Default −0.150. Pixels at or below it are class 5. |
+
+| Output | Description |
+|---|---|
+| Severity classes (dnbr6) | Byte raster, classes 0–6, with a `.qml` style and the thresholds, offset and image ids in its metadata. |
+| Low, Moderate, High threshold used | Numbers, for models; 9.999 means the class was switched off. |
 
 Thresholds are fire-specific choices by an analyst. The estimates are a starting point and are described, with how well they reproduce MTBS, under *Validation against MTBS*.
 
@@ -374,6 +421,15 @@ Plotting percent puts zones of different sizes on the same scale. Use the `ac_` 
 | "N classes in the threshold table but M class names" | Give one class name per table row, in the same order. |
 | "No burned area inside: …" | Those sub-areas don't overlap the burned area and are left out of the summary. |
 | "Invalid value for minimum" when typing a threshold | A pasted minus sign may be a typographic `−` rather than a hyphen `-`. Type it with the keyboard. |
+| "The … layer is a scenes layer (image footprints from a Find ... scenes run)" | The area of interest or burned area is set to the output of a *Find ... scenes* run, which QGIS often pre-selects because it is the newest layer. Choose the fire's polygons. |
+| "The area is … pixels (… km); that is too large" | The area of interest is far bigger than a fire, such as image footprints or a whole region. Use the fire's polygons. |
+| "Could not read … the Earthdata login was probably refused" | Check the `urs.earthdata.nasa.gov` line in `~/.netrc` (see *Earthdata login*) and that you can sign in on the Earthdata website. |
+| "No image pair found" | No pre/post dates were clear enough. Lower *Minimum clear share*, widen the season or years in *Suggest image pairs*, try another imagery source, or give the granule ids. |
+| "…% of the offset sample looks burned" | The ring outside the burned area contains burned land: the polygons are clipped or miss part of the fire. Use a complete perimeter, or a generous outline with the burned area drafted. |
+| "The offset is beyond ±0.1" or "the offset sample spreads widely" | The two dates differ in season, moisture or sensor. Try a pair closer in the season. |
+| "The two threshold estimates disagree on the high threshold" | The nearby-MTBS and own-data estimates differ by more than 0.1. Check the high class against `reflectance_post.tif`, or enter thresholds. |
+| "No burned area found at dNBR >= … inside the given polygons" | Drafting found nothing: lower *Drafted burned area: dNBR of at least*, or check that the outline covers the fire and that the pair brackets it. |
+| "HLS starts in 2013" | Choose Landsat 4–9 (Planetary Computer) for older fires. |
 | The tool still shows old behavior after an update | Reinstall the plugin, or add the script again, then refresh the Toolbox or restart QGIS. |
 
 ## Limitations
@@ -381,6 +437,10 @@ Plotting percent puts zones of different sizes on the same scale. Use the `ac_` 
 - **Generic thresholds.** None of the preset thresholds were calibrated for a particular fire. Field-validated products such as BAER Soil Burn Severity maps use fire-specific thresholds. Use custom thresholds when you have calibrated ones.
 - **Calibration.** The tool trusts that its input dNBR was made from surface reflectance. Sentinel-2 L2A (processing baseline 04.00 and later, from January 2022) needs the −1000 offset before dividing by 10,000, and Landsat Collection 2 Level-2 needs DN × 0.0000275 − 0.2. Skipping either one changes every class. HLS input avoids both problems.
 - **Sensor consistency.** Pre- and post-fire images from different sensors (for example Sentinel-2 and Landsat) can shift NBR values and with them every index. HLS harmonizes the two.
+- **Estimated thresholds** (pipeline). On 17 MTBS fires, the best estimate reproduces MTBS's classes at kappa about 0.56, against 0.78 with MTBS's own thresholds. Review them against the imagery and any field data.
+- **Drafted perimeters** (pipeline). A dNBR draft matches MTBS perimeters at a mean IoU of about 0.7: it misses faint low-severity edges and can take in unrelated change such as harvests or other fires. Edit it before reporting areas.
+- **Masked burn scars** (pipeline). Fmask, QA_PIXEL and SCL sometimes flag fresh burn scars as cloud shadow or water; the log reports each class's share. Masked pixels are class 6, non-mapping.
+- **Older imagery** (pipeline). Landsat 5 and 7 pairs agree less with MTBS (mean kappa 0.69 on six fires from 2000 to 2012), and Landsat 7 scenes after May 2003 have scan-line gaps.
 - **Pixel-center rule.** Zonal Histogram counts a pixel in a zone only if its center is inside, so small or narrow zones are approximated.
 
 ## Development
@@ -393,9 +453,11 @@ Plotting percent puts zones of different sizes on the same scale. Use the `ac_` 
 | `docs/DESIGN.md` | The pipeline plan, decisions and verified service details. |
 | `dev/build_plugin.py` | Builds `dist/wildfire_analysis_toolkit-<version>.zip`. |
 | `dev/smoke_test.py` | Runs every mode on `testdata/` and checks the counts, inside QGIS (Python Console) or headless. |
-| `dev/pipeline_test.py` | Tests the offline pipeline algorithms (Build dNBR) on `testdata/`. |
+| `dev/pipeline_test.py` | Tests the offline algorithms on `testdata/` and synthetic scenes: Build dNBR, Classify severity, Prepare local scene NBR, Draft burned-area perimeter, Severity map, the pipeline report's inputs, and refusing scenes layers as an area of interest. |
+| `dev/mtbs_validation.py` | Reruns published MTBS fires with MTBS's dates, perimeters and thresholds and compares the classes pixel by pixel (online, about an hour; `--pc` for the pre-2013 Landsat fires). |
+| `dev/threshold_study.py` | Scores the threshold estimates against MTBS's choices (offline, on the validation outputs). |
 | `dev/perimeter_study.py` | Scores the perimeter draft against MTBS perimeters (offline, on the validation outputs). |
-| `dev/online_test.py` | Runs the whole chain against the live HLS archive, from search to summary table (needs a network and the Earthdata login). |
+| `dev/online_test.py` | Runs the whole chain against the live HLS archive and Planetary Computer, from search to summary table, and the one-step pipeline (given pair, suggested pair, drafted burned area, Planetary Computer). Needs a network and the Earthdata login; a few minutes. |
 | `dev/run_headless.sh` | Runs a dev script with a QGIS app's bundled Python, for example `dev/run_headless.sh /Applications/QGIS.app` (smoke test) or `dev/run_headless.sh /Applications/QGIS.app online_test.py`. |
 | `dev/make_testdata.py` | Rebuilds `testdata/` from the full Lab 6 data. |
 
