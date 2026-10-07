@@ -465,6 +465,94 @@ for label, spec in (("HLS", "granule:string&field=sensor:string&field=date:strin
     check(f"{label} scenes layer as the burned area is refused",
           res is None and any("scenes layer" in m for m in log), " | ".join(log[-3:]))
 
+# 14. Fire name and dates from a WFIGS perimeter's attributes
+import datetime  # noqa: E402
+from qgis.PyQt.QtCore import QDateTime  # noqa: E402
+from fireanalysis.incident import fire_details, read_incident  # noqa: E402
+from fireanalysis.algorithms.suggest_image_pairs import SuggestImagePairs  # noqa: E402
+
+
+def wfigs(rows, text_dates=False):
+    """A memory layer with WFIGS fields; rows: dicts of attr_/poly_ values."""
+    kind = "string" if text_dates else "datetime"
+    spec = ("poly_IncidentName:string&field=attr_UniqueFireIdentifier:string"
+            f"&field=attr_FireDiscoveryDateTime:{kind}&field=attr_ContainmentDateTime:{kind}"
+            f"&field=attr_ControlDateTime:{kind}&field=attr_FireOutDateTime:{kind}"
+            "&field=attr_PercentContained:double&field=attr_ICS209RptForTimePeriodTo:datetime"
+            "&field=poly_PolygonDateTime:datetime&field=poly_GISAcres:double"
+            "&field=attr_InitialLatitude:double&field=attr_InitialLongitude:double")
+    layer = QgsVectorLayer(f"Polygon?crs=EPSG:26912&field={spec}", "wfigs", "memory")
+    feats = []
+    for row in rows:
+        ft = QgsFeature(layer.fields())
+        ft.setGeometry(QgsGeometry.fromWkt("POLYGON((400000 4000000,401000 4000000,401000 4001000,400000 4001000,"
+                                           "400000 4000000))"))
+        for k, v in row.items():
+            ft[k] = v
+        feats.append(ft)
+    layer.dataProvider().addFeatures(feats)
+    return layer
+
+
+def utc(*a):
+    """A QDateTime for a UTC time, on Qt 5 and 6."""
+    return QDateTime.fromSecsSinceEpoch(int(datetime.datetime(*a, tzinfo=datetime.timezone.utc).timestamp()))
+
+
+base = {"poly_IncidentName": "Ferris", "attr_UniqueFireIdentifier": "2026-COSJF-000536",
+        "attr_FireDiscoveryDateTime": utc(2026, 6, 27, 21, 4), "poly_GISAcres": 64881.2,
+        "attr_InitialLatitude": 37.657, "attr_InitialLongitude": -108.694}
+cases = [
+    ("containment date", dict(base, attr_ContainmentDateTime=utc(2026, 7, 20, 19)), False,
+     (datetime.date(2026, 6, 27), datetime.date(2026, 7, 20)), "containment"),
+    ("no containment: control date", dict(base, attr_ControlDateTime=utc(2026, 7, 25, 19)), False,
+     (datetime.date(2026, 6, 27), datetime.date(2026, 7, 25)), "control"),
+    ("no end dates, 100 % contained: last ICS-209", dict(base, attr_PercentContained=100.0,
+                                                         attr_ICS209RptForTimePeriodTo=utc(2026, 8, 6, 20)), False,
+     (datetime.date(2026, 6, 27), datetime.date(2026, 8, 6)), "ICS-209"),
+    ("evening containment in UTC is the local day before", dict(base, attr_ContainmentDateTime=utc(2026, 8, 6, 1)),
+     False, (datetime.date(2026, 6, 27), datetime.date(2026, 8, 5)), "containment"),
+    ("no end dates, not contained: perimeter date", dict(base, poly_PolygonDateTime=utc(2026, 7, 11, 19)), False,
+     (datetime.date(2026, 6, 27), datetime.date(2026, 7, 11)), "perimeter"),
+    ("dates as text (GeoJSON)", dict(base, attr_FireDiscoveryDateTime="2026-06-27T21:04:00Z",
+                                     attr_ContainmentDateTime="2026/07/20 19:00:00"), True,
+     (datetime.date(2026, 6, 27), datetime.date(2026, 7, 20)), "containment"),
+]
+for label, row, text, want, note in cases:
+    layer = wfigs([row], text)
+    alg = BurnSeverityPipeline()
+    alg.initAlgorithm()
+    fb = _Feedback()
+    try:
+        name, start, end, inc = fire_details(alg, {"PERIMETER": layer}, ctx, fb, "PERIMETER", "FIRE_NAME",
+                                             "FIRE_START", "FIRE_END")
+        ok = (name, start, end) == ("Ferris", *want) and note in (inc["end_note"] or "") \
+            and inc["ignition"] == (37.657, -108.694)
+        detail = f"{name} {start} {end} {inc['end_note']} | " + " | ".join(fb.log)
+    except Exception as e:
+        ok, detail = False, str(e)
+    check(f"WFIGS record, {label}", ok, detail)
+
+# Given values win over the record
+layer = wfigs([dict(base, attr_ContainmentDateTime=utc(2026, 7, 20))])
+alg = BurnSeverityPipeline()
+alg.initAlgorithm()
+name, start, end, _ = fire_details(alg, {"PERIMETER": layer, "FIRE_NAME": "My fire",
+                                         "FIRE_END": QDateTime(datetime.datetime(2026, 7, 30))},
+                                   ctx, _Feedback(), "PERIMETER", "FIRE_NAME", "FIRE_START", "FIRE_END")
+check("WFIGS record: a given name and end date win", (name, start, end) ==
+      ("My fire", datetime.date(2026, 6, 27), datetime.date(2026, 7, 30)), f"{name} {start} {end}")
+
+# A layer with several fires, and a layer without a WFIGS record and without dates, are refused
+many = wfigs([dict(base, attr_UniqueFireIdentifier=f"2026-XX-{i}") for i in range(8)])
+res, log = _run(SuggestImagePairs(), {"AOI": many, "OUTPUT": "TEMPORARY_OUTPUT"})
+check("WFIGS layer with several fires is refused", res is None and any("several fires" in m for m in log),
+      " | ".join(log[-3:]))
+res, log = _run(SuggestImagePairs(), {"AOI": BURN, "OUTPUT": "TEMPORARY_OUTPUT"})
+check("no dates and no WFIGS record: asks for the dates", res is None and any("Set the fire start and end date" in m
+                                                                             for m in log), " | ".join(log[-3:]))
+check("non-WFIGS layer: no record", read_incident(QgsVectorLayer(BURN, "b", "ogr")) is None)
+
 print(f"\n{'ALL PASSED' if not failed else f'{failed} FAILED'}")
 if _app is not None:
     _app.exitQgis()

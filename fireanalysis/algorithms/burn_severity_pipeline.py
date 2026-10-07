@@ -17,7 +17,10 @@ from qgis.core import (QgsDataSourceUri, QgsDistanceArea, QgsProcessing, QgsProc
                        QgsProcessingParameterFolderDestination, QgsProcessingParameterNumber,
                        QgsProcessingParameterString, QgsProcessingUtils, QgsProject, QgsVectorLayer)
 
+from qgis.PyQt.QtCore import QDate
+
 from .. import VERSION
+from ..incident import fire_details
 from ..compat import advanced, date_type, double_type, integer_type, polygon_source
 from .build_dnbr import BuildDnbr, source_union
 from .draft_perimeter import DraftPerimeter
@@ -102,6 +105,10 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
             'Landsat 4–9 Collection 2 (from 1982) or Sentinel-2 L2A through Planetary Computer (no '
             'account). Everything is written to the output folder. Choosing the pair reads the quality '
             'band of every candidate date, about a minute or two.</p>'
+            '<p><b>From a WFIGS perimeter:</b> give one fire from WFIGS Interagency Fire Perimeters '
+            '(NIFC; select it and tick Selected features only) and leave the fire name and dates empty: '
+            'they are read from its record (name; discovery date; containment, else control, else fire-out '
+            'date), and the report lists the record (size, cause, ignition point, mapping method).</p>'
             '<p><b>Burned area.</b> <i>As given</i> uses your polygons for everything: draw them along '
             'the burned edge. <i>Drafted from dNBR</i> takes a generous outline drawn around the whole '
             'fire instead: it sets the imagery window and the unburned ring for the offset, and the '
@@ -124,11 +131,14 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
             self.PERIMETER_MODE, 'Burned area', options=PERIMETER_MODES, defaultValue=AS_GIVEN))
         self.addParameter(QgsProcessingParameterEnum(
             self.SOURCE, 'Imagery', options=[s[1] for s in SOURCES], defaultValue=0))
-        self.addParameter(QgsProcessingParameterString(self.FIRE_NAME, 'Fire name', 'Fire'))
-        self.addParameter(QgsProcessingParameterDateTime(self.FIRE_START, 'Fire start (ignition) date',
-                                                         type=date_type()))
-        self.addParameter(QgsProcessingParameterDateTime(self.FIRE_END, 'Fire end (containment) date',
-                                                         type=date_type()))
+        self.addParameter(QgsProcessingParameterString(
+            self.FIRE_NAME, 'Fire name (empty = from a WFIGS perimeter, else "Fire")', optional=True))
+        self.addParameter(QgsProcessingParameterDateTime(
+            self.FIRE_START, 'Fire start (ignition) date (empty = from a WFIGS perimeter)', type=date_type(),
+            optional=True))
+        self.addParameter(QgsProcessingParameterDateTime(
+            self.FIRE_END, 'Fire end (containment) date (empty = from a WFIGS perimeter)', type=date_type(),
+            optional=True))
         self.addParameter(QgsProcessingParameterEnum(
             self.ASSESSMENT, 'Assessment', options=ASSESSMENTS, defaultValue=INITIAL))
         self.addParameter(QgsProcessingParameterFeatureSource(
@@ -229,9 +239,11 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
         if folder == QgsProcessing.TEMPORARY_OUTPUT or not folder:
             folder = QgsProcessingUtils.generateTempFilename('burn_severity')
         os.makedirs(folder, exist_ok=True)
-        fire = self.parameterAsString(parameters, self.FIRE_NAME, context).strip() or 'Fire'
-        start = self.parameterAsDateTime(parameters, self.FIRE_START, context).date()
-        end = self.parameterAsDateTime(parameters, self.FIRE_END, context).date()
+        # Name and dates: as given, else from the perimeter's WFIGS record (stops on a layer of many fires)
+        fire, start_d, end_d, incident = fire_details(self, parameters, context, feedback, self.PERIMETER,
+                                                      self.FIRE_NAME, self.FIRE_START, self.FIRE_END)
+        fire = fire or 'Fire'
+        start, end = QDate(start_d), QDate(end_d)
         assessment = self.parameterAsEnum(parameters, self.ASSESSMENT, context)
         perimeter = parameters[self.PERIMETER]
         drafted = self.parameterAsEnum(parameters, self.PERIMETER_MODE, context) == DRAFTED
@@ -241,7 +253,7 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
         log, report = {}, {'fireanalysis_version': VERSION, 'created': datetime.datetime.now().isoformat(timespec='seconds'),
                            'fire': fire, 'fire_start': start.toString('yyyy-MM-dd'),
                            'fire_end': end.toString('yyyy-MM-dd'), 'assessment': ASSESSMENTS[assessment],
-                           'imagery': SOURCES[source_index][1]}
+                           'imagery': SOURCES[source_index][1], 'incident': incident}
 
         # Inputs, so a report says which perimeter and sub-areas it used
         geom, crs = source_union(self.parameterAsSource(parameters, self.PERIMETER, context), 'burned-area')
@@ -451,6 +463,27 @@ def _lower_first(text):
     return text[:1].lower() + text[1:]
 
 
+def _incident_html(r):
+    """The Fire record section: the perimeter's WFIGS incident record, when it has one."""
+    e = html.escape
+    f = r.get('incident')
+    if not f:
+        return ''
+    rows = [('Incident', ' '.join(str(x) for x in (f.get('name'), f'({f["id"]})' if f.get('id') else '') if x)),
+            ('Discovered', f'{f["start"]} ({f["start_field"]})' if f.get('start') else ''),
+            ('End', f'{f["end"]} ({f["end_note"]}, {f["end_field"]})' if f.get('end') else 'not recorded'),
+            ('Reported size', f'{f["acres"]:,.0f} ac ({f["acres"] / 2.4710538:,.0f} ha)' if f.get('acres') else ''),
+            ('Ignition point', f'{f["ignition"][0]:.5f}, {f["ignition"][1]:.5f}' if f.get('ignition') else ''),
+            ('Perimeter', ', '.join(x for x in (f.get('map_method'), f'dated {f["perimeter_date"]}'
+                                                if f.get('perimeter_date') else '', f.get('feature_category')) if x)),
+            ('Cause', f.get('cause') or ''),
+            ('Location', ', '.join(x for x in (f.get('description'), f.get('county'), f.get('state'), f.get('unit'))
+                                   if x))]
+    body = ''.join(f'<tr><td>{e(k)}</td><td style="text-align:left">{e(v)}</td></tr>' for k, v in rows if v)
+    return (f'<h2>Fire record</h2><p class="note">From the perimeter\'s {e(f["source"])} attributes; '
+            'dates the run used unless you gave them.</p><table>' + body + '</table>')
+
+
 def _inputs_html(r):
     """The Inputs section: which perimeter and sub-area layers the run used."""
     e = html.escape
@@ -477,6 +510,7 @@ def _inputs_html(r):
                f'<p>Outline (imagery window and offset ring): {layer(i.get("perimeter"))}</p>']
     else:
         out = [f'<h2>Inputs</h2><p>Burned area: {layer(i.get("perimeter"))}</p>']
+    out.insert(0, _incident_html(r))
     if i.get('subareas'):
         how = (f'one zone per value of <code>{e(i["subarea_field"])}</code>' if i.get('subarea_field')
                else f'one zone, {e(i.get("subarea_name") or "Sub-area")}')

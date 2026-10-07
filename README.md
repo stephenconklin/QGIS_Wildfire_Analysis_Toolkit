@@ -76,8 +76,8 @@ Checked against 17 published MTBS fires: the imagery and calibration reproduce M
 | Burned-area polygons | The fire, drawn along the burned edge; or, with *Burned area* drafted, a generous outline drawn around the whole fire. Also the area of interest for the imagery. |
 | Burned area | *As given* (default): the polygons are the burned area. *Drafted from dNBR inside the given polygons*: see below. |
 | Imagery | NASA HLS (default; 2013 on; Earthdata login), Landsat 4–9 Collection 2 (1982 on) or Sentinel-2 L2A, both from Planetary Computer without an account. |
-| Fire name | Zone name in the summary and the report. |
-| Fire start, Fire end | Ignition and containment dates, for choosing the image pair. |
+| Fire name | Zone name in the summary and the report. Empty: the incident name from a WFIGS perimeter, else *Fire*. |
+| Fire start, Fire end | Ignition and containment dates, for choosing the image pair. Empty: read from a WFIGS perimeter (see below). |
 | Assessment | Initial (soon after the fire) or extended (next growing season). |
 | Sub-area polygons, name field, name | Optional zones for the summary, as in *Burn severity summary*. |
 | Estimate empty thresholds from; Low, Moderate, High threshold | As in *Classify severity*. |
@@ -87,6 +87,8 @@ Checked against 17 published MTBS fires: the imagery and calibration reproduce M
 | Output folder | Where everything goes. |
 
 Steps: *Suggest image pairs* (rank 1; all candidates in `image_pairs.csv`), *Fetch HLS NBR* or *Fetch Landsat / Sentinel-2 NBR* for both dates, *Build dNBR* (ring offset), *Draft burned-area perimeter* (only when the burned area is drafted), *Classify severity*, *Burn severity summary* with the classification's thresholds. The folder holds `nbr_pre.tif`, `nbr_post.tif`, `reflectance_post.tif` (SWIR2/NIR/red, for checking the classes), `dnbr.tif`, `rdnbr.tif`, `rbr.tif`, `dnbr6.tif` with its MTBS style, `perimeter_draft.gpkg` (when drafted), `summary.gpkg` and `summary.csv`, zones and histogram, `dnbr6.png` (the classes with the burned-area outline), and `report.html` (with a bar chart and the map) and `report.json`: the input layers (source, feature count, burned-area size in hectares and acres; flagged when temporary or selected features only), scenes, calibration, offset, thresholds and how they were chosen, the other estimate method's thresholds as a cross-check, every warning, and the summary. When the two threshold estimates disagree on the high threshold by more than 0.1, the report says so. The dNBR and the classes load into the project when it finishes.
+
+**Fire name and dates from WFIGS.** Perimeters from [WFIGS Interagency Fire Perimeters](https://data-nifc.opendata.arcgis.com/) (NIFC; the `poly_` and `attr_` fields of the service and its downloads, with or without the prefixes) carry the incident record. Select one fire in the layer and tick *Selected features only* (or export it), and leave the fire name and dates empty: the pipeline and *Suggest image pairs* read the incident name, the discovery date (`FireDiscoveryDateTime`) and the end date (`ContainmentDateTime`, else `ControlDateTime`, else `FireOutDateTime`). A fire without any of those gets the period end of its last ICS-209 report if it was 100 % contained by then, else the perimeter's own date, with a warning that the end date is an estimate. WFIGS stores UTC; dates are taken in local solar time at the ignition longitude, so a fire contained at 7 PM in Colorado is not moved to the next day. Anything you enter wins. The report's *Fire record* section lists the record: incident id, dates and the fields they came from, reported size, ignition point, mapping method and perimeter date, cause and location. A layer holding several fires stops with a message instead of mapping them all.
 
 **Where the perimeter comes from.** The polygons do three jobs: they set the imagery window (with a 3 km buffer), the unburned ring for the dNBR offset (90–2090 m outside them), and the burned area that is classified and summarized. A generous hand-drawn outline is fine for the first two but inflates *Unburned to low* in the third. The best burned area is an official perimeter (MTBS once published, otherwise the NIFC/WFIGS interagency final perimeter or a BAER/RAVG perimeter), saved to a file. When there is none, set *Burned area* to *Drafted from dNBR inside the given polygons* and give a generous outline around the whole fire: the outline still sets the imagery window and the offset ring, and *Draft burned-area perimeter* (dNBR ≥ 0.05, patches ≥ 20 ha, holes ≤ 2 ha filled, clipped to the outline) becomes the burned area, saved as `perimeter_draft.gpkg`. The report gives its size and its share of the outline. The draft is a starting point (mean IoU 0.69–0.73 against MTBS perimeters): edit it against `reflectance_post.tif` and rerun with it as given, with the granule ids from the report, for a final assessment.
 
@@ -124,7 +126,7 @@ Output: one footprint per granule with `granule`, `sensor`, `tile`, `date`, `doy
 |---|---|
 | Imagery | NASA HLS (default), or Landsat 4–9 or Sentinel-2 from Planetary Computer. |
 | Burned area or area of interest | The fire's polygons. The clear share is measured inside them. |
-| Fire start, Fire end | Ignition and containment dates. |
+| Fire start, Fire end | Ignition and containment dates. Empty: read from a WFIGS perimeter, as in the pipeline. |
 | Assessment | Initial (soon after the fire) or extended (next growing season). |
 | HLS sensors | L30, S30 or both (HLS only). |
 | Minimum clear share inside the area (%) | Default 95. Dates below it are not paired. |
@@ -429,6 +431,9 @@ Plotting percent puts zones of different sizes on the same scale. Use the `ac_` 
 | "The offset is beyond ±0.1" or "the offset sample spreads widely" | The two dates differ in season, moisture or sensor. Try a pair closer in the season. |
 | "The two threshold estimates disagree on the high threshold" | The nearby-MTBS and own-data estimates differ by more than 0.1. Check the high class against `reflectance_post.tif`, or enter thresholds. |
 | "No burned area found at dNBR >= … inside the given polygons" | Drafting found nothing: lower *Drafted burned area: dNBR of at least*, or check that the outline covers the fire and that the pair brackets it. |
+| "The perimeter layer holds several fires" | A whole WFIGS layer was given. Select the fire and tick *Selected features only*, or export it. |
+| "Set the fire start and end date" | The perimeter has no WFIGS record. Enter the dates. |
+| "The fire end date is an estimate" | The WFIGS record has no containment, control or fire-out date. Enter the end date if you know it. |
 | "HLS starts in 2013" | Choose Landsat 4–9 (Planetary Computer) for older fires. |
 | The tool still shows old behavior after an update | Reinstall the plugin, or add the script again, then refresh the Toolbox or restart QGIS. |
 

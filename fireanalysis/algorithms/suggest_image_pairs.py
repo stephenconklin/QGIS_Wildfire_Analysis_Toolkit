@@ -144,6 +144,9 @@ class SuggestImagePairs(QgsProcessingAlgorithm):
             'cloud, shadow or snow) for at least the minimum share. Pairs are ranked by the day-of-year gap (in 5-day '
             'steps), then fewer years apart, then the lower of the two clear shares, then the earliest '
             'post-fire date.</li></ul>'
+            '<p><b>Fire dates from WFIGS:</b> leave the dates empty to read them from a WFIGS Interagency '
+            'Fire Perimeters polygon (NIFC): discovery date, and containment, else control, else fire-out '
+            'date. Select one fire in the layer and tick Selected features only.</p>'
             '<p>Reads the quality band of every candidate date (six at a time), which takes a minute '
             'or two. The <i>pre_granules</i> and <i>post_granules</i> fields go straight into the ids '
             'box of <i>Fetch HLS NBR</i> or <i>Fetch Landsat / Sentinel-2 NBR</i>. With Planetary '
@@ -159,10 +162,12 @@ class SuggestImagePairs(QgsProcessingAlgorithm):
             self.SOURCE, 'Imagery', options=[s[1] for s in SOURCES], defaultValue=0))
         self.addParameter(QgsProcessingParameterFeatureSource(
             self.AOI, 'Burned area or area of interest', [polygon_source()]))
-        self.addParameter(QgsProcessingParameterDateTime(self.FIRE_START, 'Fire start (ignition) date',
-                                                         type=date_type()))
-        self.addParameter(QgsProcessingParameterDateTime(self.FIRE_END, 'Fire end (containment) date',
-                                                         type=date_type()))
+        self.addParameter(QgsProcessingParameterDateTime(
+            self.FIRE_START, 'Fire start (ignition) date (empty = from a WFIGS perimeter)', type=date_type(),
+            optional=True))
+        self.addParameter(QgsProcessingParameterDateTime(
+            self.FIRE_END, 'Fire end (containment) date (empty = from a WFIGS perimeter)', type=date_type(),
+            optional=True))
         self.addParameter(QgsProcessingParameterEnum(
             self.ASSESSMENT, 'Assessment', options=ASSESSMENTS, defaultValue=INITIAL))
         self.addParameter(QgsProcessingParameterEnum(
@@ -207,11 +212,10 @@ class SuggestImagePairs(QgsProcessingAlgorithm):
         return rows
 
     def processAlgorithm(self, parameters, context, feedback):
+        from ..incident import fire_details
+        _, start, end, _ = fire_details(self, parameters, context, feedback, self.AOI, None,
+                                        self.FIRE_START, self.FIRE_END)
         aoi = aoi_geometry(self.parameterAsSource(parameters, self.AOI, context), context)
-        start = self.parameterAsDateTime(parameters, self.FIRE_START, context).date().toPyDate()
-        end = self.parameterAsDateTime(parameters, self.FIRE_END, context).date().toPyDate()
-        if end < start:
-            raise QgsProcessingException('The fire end date is before the start date.')
         assessment = self.parameterAsEnum(parameters, self.ASSESSMENT, context)
         source = SOURCES[self.parameterAsEnum(parameters, self.SOURCE, context)][0]
         sensors = [hls.SENSORS[i] for i in self.parameterAsEnums(parameters, self.SENSORS, context)]
