@@ -5,7 +5,7 @@ import os
 from qgis.core import (QgsGeometry, QgsProcessingAlgorithm, QgsProcessingException, QgsProcessingOutputNumber,
                        QgsProcessingParameterEnum, QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterNumber, QgsProcessingParameterRasterDestination,
-                       QgsProcessingParameterRasterLayer)
+                       QgsProcessingParameterRasterLayer, QgsProcessingParameterString)
 
 from .. import VERSION, mtbs, raster
 from ..compat import advanced, double_type, integer_type, polygon_source, warn
@@ -30,8 +30,10 @@ MIN_HIGH_SHARE = 0.005  # less than this share of RdNBR-high pixels -> no high c
 DENSE_PRE_NBR = (0.5, 0.4, 0.3)
 MIN_DENSE_PIXELS = 100
 
-NEARBY, OWN_DATA = 0, 1
-ESTIMATES = ['Median thresholds of nearby MTBS fires (online)', "This fire's dNBR and RdNBR (offline)"]
+# ESTIMATE options; order is API (append only)
+NEARBY, OWN_DATA, FIRE_MTBS = 0, 1, 2
+ESTIMATES = ['Median thresholds of nearby MTBS fires (online)', "This fire's dNBR and RdNBR (offline)",
+             "This fire's own MTBS thresholds when MTBS has mapped it, else nearby MTBS fires"]
 MIN_NEARBY_FIRES = 5
 
 
@@ -125,6 +127,7 @@ class ClassifySeverity(QgsProcessingAlgorithm):
     ESTIMATE = 'ESTIMATE'
     RADIUS = 'RADIUS'
     YEARS = 'YEARS'
+    MTBS_FIRE = 'MTBS_FIRE'
     OUTPUT = 'OUTPUT'
 
     def name(self):
@@ -148,9 +151,15 @@ class ClassifySeverity(QgsProcessingAlgorithm):
             'dNBR ≤ the greenness threshold.</p>'
             '<p><b>Thresholds</b> are fire-specific choices of an analyst. Leave one empty to '
             'estimate it:</p><ul>'
+            '<li><b>This fire\'s own MTBS thresholds</b> (default): when MTBS has mapped the fire (the '
+            'burned-area layer is an MTBS perimeter, or the fire is named in <i>MTBS fire</i>), MTBS\'s '
+            'published thresholds, taken relative to MTBS\'s offset and moved to this pair\'s. Otherwise '
+            'as nearby MTBS fires. With MTBS\'s thresholds our classes agreed with MTBS at a mean kappa of '
+            '0.78 on 17 fires.</li>'
             '<li><b>Nearby MTBS fires</b> (default, online): the median low, moderate and high '
-            'thresholds of MTBS-mapped wildfires within the radius over the past years (same '
-            'assessment type when there are at least 5), from the MTBS map service. Each is taken '
+            'thresholds of MTBS-mapped wildfires whose burned area is centred within the radius over the '
+            'past years (same assessment type when there are at least 5), from the MTBS fire records '
+            '(downloaded from USGS and cached in your QGIS profile; refreshed when USGS updates them). Each is taken '
             'relative to that fire\'s MTBS offset and moved to this pair\'s offset (from the dNBR '
             'metadata or the Offset option), so a pair whose unburned land reads 0.1 gets thresholds '
             '0.1 higher. Our dNBR is on the MTBS scale, so their analysts\' choices carry over.</li>'
@@ -180,7 +189,9 @@ class ClassifySeverity(QgsProcessingAlgorithm):
             self.addParameter(QgsProcessingParameterNumber(
                 name, f'{label} (raw dNBR; empty = estimate)', type=double_type(), optional=True))
         self.addParameter(QgsProcessingParameterEnum(
-            self.ESTIMATE, 'Estimate empty thresholds from', options=ESTIMATES, defaultValue=NEARBY))
+            self.ESTIMATE, 'Estimate empty thresholds from', options=ESTIMATES, defaultValue=FIRE_MTBS))
+        self.addParameter(advanced(QgsProcessingParameterString(
+            self.MTBS_FIRE, 'MTBS fire (id, or name and year; empty = from the burned-area layer)', optional=True)))
         self.addParameter(advanced(QgsProcessingParameterNumber(
             self.RADIUS, 'Nearby MTBS fires: radius (km)', type=double_type(), minValue=10, defaultValue=150)))
         self.addParameter(advanced(QgsProcessingParameterNumber(
@@ -197,6 +208,38 @@ class ClassifySeverity(QgsProcessingAlgorithm):
         for name, label in ((self.LOW_T, 'Low threshold used'), (self.MODERATE_T, 'Moderate threshold used'),
                             (self.HIGH_T, 'High threshold used')):
             self.addOutput(QgsProcessingOutputNumber(name, label))
+
+    def _mtbs_record(self, parameters, context, feedback):
+        """This fire's MTBS record: named in MTBS_FIRE, else the burned-area layer's own
+        MTBS attributes; None when neither (or the records can't be had)."""
+        from ..incident import read_mtbs
+        text = (self.parameterAsString(parameters, self.MTBS_FIRE, context) or '').strip()
+        if text:
+            try:
+                return mtbs.resolve(mtbs.records(feedback), text)
+            except mtbs.MtbsError as e:
+                warn(feedback, f'MTBS fire: {e}')
+                return None
+        return read_mtbs(self.parameterAsSource(parameters, self.PERIMETER, context))
+
+    @staticmethod
+    def _from_record(r, offset, given):
+        """This fire's MTBS thresholds at this pair's offset (None: not known)."""
+        values = mtbs.thresholds(r, offset)
+        notes = []
+        for key, v, label in zip(mtbs.RECORD_KEYS, values, ('low', 'moderate', 'high')):
+            m = r.get(key)
+            if v is None:
+                notes.append('')
+            elif v >= NONE_VALUE:
+                notes.append(f'none: MTBS mapped no {label} class for {r["event_id"]}')
+            elif offset is None or r.get('dnbr_offst') is None:
+                notes.append(f'MTBS {r["event_id"]}: {m:.0f}')
+            else:
+                notes.append(f'MTBS {r["event_id"]}: {m:.0f} with MTBS offset {r["dnbr_offst"]:.0f} (x1000), '
+                             f'at this pair\'s offset {offset:+.3f}')
+        values = [None if v is None else (v if v >= NONE_VALUE else round(v, 3)) for v in values]
+        return values, notes
 
     def _number(self, parameters, name, context):
         v = parameters.get(name)
@@ -216,10 +259,11 @@ class ClassifySeverity(QgsProcessingAlgorithm):
         year = int(date[:4])
         radius = self.parameterAsDouble(parameters, self.RADIUS, context)
         years = self.parameterAsInt(parameters, self.YEARS, context)
-        fires = mtbs.nearby_fires(lon, lat, radius, year - years, year, feedback=feedback)
+        fires, where = mtbs.nearby(lon, lat, radius, year - years, year, feedback=feedback)
         kind = 'Extended' if assessment == EXTENDED else 'Initial'
-        thresholds, counts, n, scope = mtbs.median_thresholds(fires, kind, offset=offset)
-        feedback.pushInfo(f'{n} MTBS wildfires within {radius:.0f} km, {year - years}-{year} ({scope}).')
+        exclude = {self._record['event_id']} if getattr(self, '_record', None) else set()
+        thresholds, counts, n, scope = mtbs.median_thresholds(fires, kind, exclude=exclude, offset=offset)
+        feedback.pushInfo(f'{n} MTBS wildfires within {radius:.0f} km, {year - years}-{year} ({scope}; {where}).')
         if n < MIN_NEARBY_FIRES:
             return [None] * 3, [''] * 3
         notes = [f'median of {k} nearby MTBS fires' + ('' if offset is None else
@@ -314,12 +358,25 @@ class ClassifySeverity(QgsProcessingAlgorithm):
         # --- thresholds ---
         given = [self._number(parameters, k, context) for k in (self.LOW_T, self.MODERATE_T, self.HIGH_T)]
         estimated, notes = [None] * 3, ['given'] * 3
+        self._record = None
         if None in given:
             method = self.parameterAsEnum(parameters, self.ESTIMATE, context)
+            pair_offset = (0.0 if md.get('DNBR_OFFSET_SUBTRACTED') == 'YES' else offset) if offset_known else None
+            if method == FIRE_MTBS:
+                self._record = self._mtbs_record(parameters, context, feedback)
+                if self._record is not None:
+                    estimated, notes = self._from_record(self._record, pair_offset, given)
+                    feedback.pushInfo(f'MTBS record: {mtbs.describe(self._record)}.')
+                    if None in [e for e, g in zip(estimated, given) if g is None]:
+                        warn(feedback, 'The MTBS record lacks a threshold; using nearby MTBS fires instead.')
+                        method = NEARBY
+                else:
+                    feedback.pushInfo('No MTBS record for this fire (not mapped by MTBS yet, or not recognized); '
+                                      'using the median of nearby MTBS fires.')
+                    method = NEARBY
             if method == NEARBY:
                 try:
                     # thresholds sit on this dNBR: its offset is 0 once subtracted
-                    pair_offset = (0.0 if md.get('DNBR_OFFSET_SUBTRACTED') == 'YES' else offset) if offset_known else None
                     estimated, notes = self._nearby(geom, crs, md, assessment, parameters, context, feedback,
                                                     pair_offset)
                 except mtbs.MtbsError as e:
@@ -362,6 +419,8 @@ class ClassifySeverity(QgsProcessingAlgorithm):
                     'LOW_T': f'{low:.4f}', 'MODERATE_T': f'{moderate:.4f}', 'HIGH_T': f'{high:.4f}',
                     'GREENNESS_T': f'{greenness:.4f}', 'DNBR_OFFSET': f'{offset:.6f}',
                     'ASSESSMENT': ASSESSMENTS[assessment].split()[0]}
+        if self._record is not None:
+            metadata['MTBS_EVENT_ID'] = str(self._record['event_id'])
         metadata.update({f'THRESHOLD_NOTE_{k}': v for k, v in zip(('LOW', 'MODERATE', 'HIGH'), notes)})
         metadata.update({k: v for k, v in md.items() if k.startswith(('PRE_', 'POST_'))})
         raster.write(out, [('dnbr6', classes)], dnbr_ds, gdal.GDT_Byte, 255, metadata)

@@ -11,7 +11,7 @@ import os
 from qgis.core import (QgsDataSourceUri, QgsDistanceArea, QgsProcessing, QgsProcessingAlgorithm,
                        QgsProcessingException, QgsProcessingFeatureSourceDefinition,
                        QgsProcessingMultiStepFeedback, QgsProcessingOutputFile, QgsProcessingOutputFolder,
-                       QgsProcessingOutputRasterLayer, QgsProcessingOutputVectorLayer,
+                       QgsProcessingOutputRasterLayer, QgsProcessingOutputVectorLayer, QgsProcessingParameterBoolean,
                        QgsProcessingParameterDateTime, QgsProcessingParameterEnum,
                        QgsProcessingParameterFeatureSource, QgsProcessingParameterField,
                        QgsProcessingParameterFolderDestination, QgsProcessingParameterNumber,
@@ -20,12 +20,14 @@ from qgis.core import (QgsDataSourceUri, QgsDistanceArea, QgsProcessing, QgsProc
 from qgis.PyQt.QtCore import QDate
 
 from .. import VERSION
-from ..incident import fire_details
-from .. import styles
+from ..incident import fire_details, read_incident, read_mtbs
+from .. import mtbs, planetary, stac, styles
 from ..compat import advanced, date_type, double_type, integer_type, polygon_source
 from .build_dnbr import BuildDnbr, source_union
 from .draft_perimeter import DraftPerimeter
-from .classify_severity import CLASS_COLORS, ESTIMATES, NEARBY, NONE_VALUE, OWN_DATA, ClassifySeverity, write_png
+from .classify_severity import (CLASS_COLORS, ESTIMATES, EXTENDED, FIRE_MTBS, NEARBY, NONE_VALUE, OWN_DATA,
+                                ClassifySeverity, write_png, write_style)
+from .find_hls_scenes import aoi_geometry, search_granules
 from .fetch_hls_nbr import FetchHlsNbr
 from .planetary_algorithms import FetchPlanetaryNbr
 from .suggest_image_pairs import ASSESSMENTS, INITIAL, SOURCES, SuggestImagePairs
@@ -37,6 +39,10 @@ AS_GIVEN, DRAFTED = 0, 1
 # LOAD options; order is API (append only)
 LOAD_MODES = ['Results, styled, in a group named after the fire and date', 'Severity classes only', 'Nothing']
 LOAD_GROUP, LOAD_CLASSES, LOAD_NOTHING = 0, 1, 2
+# PAIR options; order is API (append only)
+PAIRS = ["MTBS's own image dates when MTBS has mapped the fire, else suggested", 'Always suggested']
+PAIR_MTBS, PAIR_SUGGESTED = 0, 1
+CLASS_LABELS = ['Unburned to low', 'Low', 'Moderate', 'High', 'Increased greenness']
 DRAFT_HOLE_HA = 2.0  # largest unburned hole filled in a drafted burned area
 
 
@@ -55,6 +61,10 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
     SOURCE = 'SOURCE'
     PERIMETER = 'PERIMETER'
     PERIMETER_MODE = 'PERIMETER_MODE'
+    MTBS_FIRE = 'MTBS_FIRE'
+    PAIR = 'PAIR'
+    MTBS_DOWNLOAD = 'MTBS_DOWNLOAD'
+    MTBS_COMPARE = 'MTBS_COMPARE'
     DRAFT_THRESHOLD = 'DRAFT_THRESHOLD'
     DRAFT_MIN_AREA = 'DRAFT_MIN_AREA'
     DRAFT_KEEP_SHARE = 'DRAFT_KEEP_SHARE'
@@ -111,6 +121,15 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
             'Landsat 4–9 Collection 2 (from 1982) or Sentinel-2 L2A through Planetary Computer (no '
             'account). Everything is written to the output folder. Choosing the pair reads the quality '
             'band of every candidate date, about a minute or two.</p>'
+            '<p><b>From an MTBS fire:</b> type its MTBS fire id or name and year (e.g. <i>Dragon Bravo '
+            '2025</i>) in <i>MTBS fire</i> and leave the polygons empty, or give one fire from <i>Find MTBS '
+            'fires</i> or the MTBS perimeter file. The plugin fetches the MTBS record itself (USGS, cached in '
+            'your profile) and uses its name, ignition date, assessment type, MTBS\'s own pre- and post-fire '
+            'image dates and, by default, MTBS\'s thresholds moved to this pair\'s offset; the perimeter '
+            'comes from the MTBS map service, or for fires it lacks from the MTBS perimeter file (a one-time '
+            '420 MB download you allow under Advanced). For fires through 2024 the report compares the classes '
+            'with MTBS\'s published ones. A WFIGS perimeter is matched to its MTBS record by IRWIN id, and any '
+            'perimeter by an MTBS fire centred inside it that ignited between the fire\'s dates.</p>'
             '<p><b>From a WFIGS perimeter:</b> give one fire from WFIGS Interagency Fire Perimeters '
             '(NIFC; select it and tick Selected features only) and leave the fire name and dates empty: '
             'they are read from its record (name; discovery date; containment, else control, else fire-out '
@@ -132,7 +151,10 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
 
     def initAlgorithm(self, config=None):
         self.addParameter(QgsProcessingParameterFeatureSource(
-            self.PERIMETER, 'Burned-area polygons (or a generous outline, when drafted)', [polygon_source()]))
+            self.PERIMETER, 'Burned-area polygons (or a generous outline, when drafted; empty = the MTBS fire\'s)',
+            [polygon_source()], optional=True))
+        self.addParameter(QgsProcessingParameterString(
+            self.MTBS_FIRE, 'MTBS fire: id, or name and year (optional; e.g. Dragon Bravo 2025)', optional=True))
         self.addParameter(QgsProcessingParameterEnum(
             self.PERIMETER_MODE, 'Burned area', options=PERIMETER_MODES, defaultValue=AS_GIVEN))
         self.addParameter(QgsProcessingParameterEnum(
@@ -155,10 +177,17 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterString(
             self.SUBAREA_NAME, 'Sub-area name (when no name field)', 'Sub-area', optional=True))
         self.addParameter(QgsProcessingParameterEnum(
-            self.ESTIMATE, 'Estimate empty thresholds from', options=ESTIMATES, defaultValue=NEARBY))
+            self.ESTIMATE, 'Estimate empty thresholds from', options=ESTIMATES, defaultValue=FIRE_MTBS))
         for name, label in ((self.LOW_T, 'Low'), (self.MODERATE_T, 'Moderate'), (self.HIGH_T, 'High')):
             self.addParameter(QgsProcessingParameterNumber(
                 name, f'{label} threshold (raw dNBR; empty = estimate)', type=double_type(), optional=True))
+        self.addParameter(advanced(QgsProcessingParameterEnum(
+            self.PAIR, 'Image pair', options=PAIRS, defaultValue=PAIR_MTBS)))
+        self.addParameter(advanced(QgsProcessingParameterBoolean(
+            self.MTBS_DOWNLOAD, 'Allow the one-time 420 MB MTBS perimeter download (fires the map service lacks)',
+            defaultValue=False)))
+        self.addParameter(advanced(QgsProcessingParameterBoolean(
+            self.MTBS_COMPARE, 'Compare with MTBS\'s published classes (fires through 2024)', defaultValue=True)))
         self.addParameter(advanced(QgsProcessingParameterString(
             self.PRE_GRANULES, 'Pre-fire granule or item ids (instead of suggesting a pair)', optional=True)))
         self.addParameter(advanced(QgsProcessingParameterString(
@@ -248,6 +277,7 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
                   ('perimeter_draft.gpkg', 'Drafted burned area (to edit)', styles.outline('200,0,0,255', 0.4, True),
                    False, True),
                   ('dnbr6.tif', 'Severity classes (MTBS)', styles.mtbs_classes, True, False),
+                  ('mtbs_dnbr6.tif', 'MTBS published classes', styles.mtbs_classes, False, False),
                   ('dnbr.tif', f'dNBR (thresholds {low:.3f} / {moderate:.3f} / {high:.3f})',
                    styles.index_ramp(-0.5, 1.0), False, False),
                   ('rdnbr.tif', 'RdNBR', styles.index_ramp(-1.0, 2.0), False, False),
@@ -258,6 +288,40 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
         for i, (name, label, style, shown, vector) in enumerate(layers):
             if (name != 'perimeter_draft.gpkg' or drafted) and os.path.exists(f(name)):
                 styles.load_on_completion(context, f(name), label, style, shown, group, len(layers) - i, vector)
+
+    @staticmethod
+    def _compare(record, classes_path, folder, feedback, log):
+        """Our classes against MTBS's published ones (image service, the fire's year) inside
+        the burned area; writes mtbs_dnbr6.tif. A dict for the report."""
+        from osgeo import gdal
+        from .. import raster
+        year = record.get('year')
+        ds = gdal.Open(classes_path)
+        try:
+            theirs = mtbs.published_classes(ds, year, feedback)
+        except mtbs.MtbsError as e:
+            log.setdefault('pipeline', []).append(f'Comparison with MTBS skipped: {e}')
+            return {'note': f'not done: {e}'}
+        if theirs is None:
+            return {'note': 'not done: the area is too large for one MTBS image service request'}
+        ours = ds.GetRasterBand(1).ReadAsArray()
+        inside = (ours > 0) & (ours < 255)
+        result = mtbs.compare(ours, theirs, inside)
+        if result is None:
+            return {'note': f'MTBS has not published classes for this fire yet (its image service holds the '
+                            f'classes by year; none for {year} inside the burned area)'}
+        out = os.path.join(folder, 'mtbs_dnbr6.tif')
+        theirs = theirs.copy()
+        theirs[~inside] = 0
+        raster.write(out, [('mtbs_dnbr6', theirs)], ds, gdal.GDT_Byte, 255,
+                     {'SOURCE': 'MTBS CONUS image service (USFS EDW)', 'MTBS_EVENT_ID': str(record['event_id']),
+                      'YEAR': str(year)})
+        write_style(out)
+        result['file'] = 'mtbs_dnbr6.tif'
+        feedback.pushInfo(f'Compared with MTBS\'s published classes: {result["agreement"]:.1f} % of '
+                          f'{result["pixels"]:,} pixels agree, kappa {result["kappa"]:.3f}, '
+                          f'{result["within_one"]:.1f} % within one class.')
+        return result
 
     @staticmethod
     def _map_png(classes_path, geom, crs, png, context):
@@ -274,6 +338,121 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
         outline = raster.rasterize(ring.buffer(width / 2, 4), rcrs, ds, context.transformContext())
         write_png(classes, ds, outline, png)
 
+    def _record(self, parameters, context, feedback):
+        """This fire's MTBS record and how it was found: named in MTBS_FIRE, else the
+        burned-area layer's own MTBS attributes, else (later) by IRWIN id or location."""
+        text = (self.parameterAsString(parameters, self.MTBS_FIRE, context) or '').strip()
+        layer_record = None
+        if parameters.get(self.PERIMETER) not in (None, ''):
+            layer_record = read_mtbs(self.parameterAsSource(parameters, self.PERIMETER, context))
+        if text:
+            try:
+                r = mtbs.resolve(mtbs.records(feedback), text)
+            except mtbs.MtbsError as e:
+                raise QgsProcessingException(f'MTBS fire: {e}') from None
+            if layer_record and layer_record.get('event_id') != r.get('event_id'):
+                steps_warn = f'The burned-area layer is MTBS fire {layer_record.get("event_id")}, but MTBS fire ' \
+                             f'names {r.get("event_id")}; using {r.get("event_id")}.'
+                getattr(feedback, 'pushWarning', feedback.pushInfo)(steps_warn)
+            return r, 'named in MTBS fire'
+        if layer_record:
+            return layer_record, "the burned-area layer's MTBS attributes"
+        return None, None
+
+    @staticmethod
+    def _match(incident, geom, crs, start, end, area_ac, context, feedback):
+        """The MTBS record of a fire given without one: by the WFIGS IRWIN id, else an
+        MTBS fire centred inside the burned area that ignited between its dates."""
+        from qgis.core import QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsGeometry
+        try:
+            recs = mtbs.records(feedback)
+        except mtbs.MtbsError as e:
+            feedback.pushInfo(f'MTBS records not available ({e}); no MTBS record looked up.')
+            return None, None
+        if incident and incident.get('irwin'):
+            r = mtbs.by_irwin(recs, incident['irwin'])
+            if r:
+                return r, f'matched by the WFIGS IRWIN id {incident["irwin"]}'
+        g = QgsGeometry(geom)
+        g.transform(QgsCoordinateTransform(crs, QgsCoordinateReferenceSystem('EPSG:4326'), context.transformContext()))
+        found = mtbs.by_location(recs, g, start, end, area_ac)
+        if not found:
+            return None, None
+        how = 'matched by location and date (an MTBS fire centred inside the burned area, ignited between its dates)'
+        if len(found) > 1:
+            others = ', '.join(f'{mtbs.display_name(r)} {r["event_id"]}' for r in found[1:4])
+            getattr(feedback, 'pushWarning', feedback.pushInfo)(
+                f'{len(found)} MTBS fires are centred inside the burned area and ignited between its dates; using '
+                f'the closest in size, {mtbs.display_name(found[0])} ({found[0]["event_id"]}); others: {others}. '
+                'Name the fire in MTBS fire to choose another.')
+        return found[0], how
+
+    def _mtbs_pair(self, r, source, perimeter, context, feedback):
+        """MTBS's own pre/post scenes as {label: (ids, source key, date, platform)}. With
+        HLS chosen, both come from HLS when it has them (Landsat 8/9, Sentinel-2, and for
+        Sentinel-2 the very tile MTBS used); otherwise both come from Planetary Computer,
+        each from its sensor's collection, so the pair is processed alike. With Landsat or
+        Sentinel-2 (Planetary Computer) chosen, MTBS's scenes are used only when they are
+        that sensor's; None otherwise (the user's choice of imagery wins). MtbsError when a
+        scene can't be found."""
+        from qgis.core import QgsJsonUtils
+        aoi = aoi_geometry(self.parameterAsSource({self.PERIMETER: perimeter}, self.PERIMETER, context), context)
+        box = aoi.boundingBox()
+        bbox = [box.xMinimum(), box.yMinimum(), box.xMaximum(), box.yMaximum()]
+        scenes = {}
+        for label, key in (('pre', 'pre_id'), ('post', 'post_id')):
+            try:
+                scenes[label] = (key, mtbs.parse_scene(r.get(key)))
+            except ValueError as e:
+                raise mtbs.MtbsError(str(e)) from None
+
+        def from_hls(scene):
+            try:
+                rows = search_granules(aoi, scene['date'], scene['date'], [scene['hls']], 100, context, feedback)
+            except QgsProcessingException as e:  # the HLS search service is down or failing
+                feedback.pushInfo(f'NASA HLS search failed ({str(e)[:200]}).')
+                return None
+            tiles = {row[3] for row in rows}
+            if not rows or (scene['kind'] == 'sentinel-2' and scene['where'] not in tiles):
+                return None
+            return [row[1] for row in rows]
+
+        def from_planetary(scene):
+            try:
+                items = planetary.search(scene['planetary'], bbox, scene['date'], scene['date'], feedback)
+            except stac.StacError as e:
+                raise mtbs.MtbsError(str(e)) from None
+            return [i['id'] for i in items
+                    if str(i['properties'].get('platform', '')).lower() == scene['platform']
+                    and QgsJsonUtils.geometryFromGeoJson(json.dumps(i['geometry'])).intersects(aoi)]
+
+        if source != 'hls' and any(sc['planetary'] != source for _, sc in scenes.values()):
+            used = ' and '.join(sorted({sc['platform'] for _, sc in scenes.values()}))
+            feedback.pushInfo(f'MTBS used {used}; with {dict(SOURCES)[source].split(",")[0]} chosen as the imagery, '
+                              'a pair is suggested from it instead of MTBS\'s scenes.')
+            return None
+        ids = {}
+        if source == 'hls' and all(sc['hls'] for _, sc in scenes.values()):
+            for label, (key, sc) in scenes.items():
+                ids[label] = from_hls(sc)
+            if all(ids.values()):
+                return {label: (' '.join(ids[label]), 'hls', sc['date'].isoformat(), sc['platform'])
+                        for label, (key, sc) in scenes.items()}
+            lacking = [f'{scenes[k][1]["platform"]} {scenes[k][1]["date"]} tile {scenes[k][1]["where"]}'
+                       for k, v in ids.items() if not v]
+            feedback.pushInfo('NASA HLS lacks MTBS\'s ' + ', '.join(lacking) + '; taking both of MTBS\'s scenes '
+                              'from Planetary Computer instead, so the pair is processed alike.')
+        elif source == 'hls':
+            feedback.pushInfo('NASA HLS has no Landsat 4-7; taking MTBS\'s scenes from Planetary Computer.')
+        out = {}
+        for label, (key, sc) in scenes.items():
+            found = from_planetary(sc)
+            if not found:
+                raise mtbs.MtbsError(f'MTBS\'s {label}-fire scene {r.get(key)} ({sc["platform"]}, {sc["date"]}) is not '
+                                     'in Planetary Computer over the burned area')
+            out[label] = (' '.join(found), sc['planetary'], sc['date'].isoformat(), sc['platform'])
+        return out
+
     # ---- main ---------------------------------------------------------------------
 
     def processAlgorithm(self, parameters, context, feedback):
@@ -281,24 +460,74 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
         if folder == QgsProcessing.TEMPORARY_OUTPUT or not folder:
             folder = QgsProcessingUtils.generateTempFilename('burn_severity')
         os.makedirs(folder, exist_ok=True)
-        # Name and dates: as given, else from the perimeter's WFIGS record (stops on a layer of many fires)
-        fire, start_d, end_d, incident = fire_details(self, parameters, context, feedback, self.PERIMETER,
-                                                      self.FIRE_NAME, self.FIRE_START, self.FIRE_END)
-        fire = fire or 'Fire'
-        start, end = QDate(start_d), QDate(end_d)
-        assessment = self.parameterAsEnum(parameters, self.ASSESSMENT, context)
+        parameters = dict(parameters)
+        record, record_how = self._record(parameters, context, feedback)
+
+        # Burned area: as given, else the MTBS fire's perimeter
+        perimeter_source = None
+        if parameters.get(self.PERIMETER) in (None, ''):
+            if record is None:
+                raise QgsProcessingException('Give the burned-area polygons, or an MTBS fire to fetch them for.')
+            gj, how = mtbs.perimeter(record, feedback, self.parameterAsBool(parameters, self.MTBS_DOWNLOAD, context))
+            if gj is None:
+                raise QgsProcessingException(how)
+            path = os.path.join(folder, 'mtbs_perimeter.geojson')
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(gj, f)
+            parameters[self.PERIMETER] = path
+            perimeter_source = how
+            feedback.pushInfo(f'Burned area: the MTBS perimeter of {mtbs.describe(record)}, from the {how}.')
         perimeter = parameters[self.PERIMETER]
+        pre_g = (self.parameterAsString(parameters, self.PRE_GRANULES, context) or '').strip()
+        post_g = (self.parameterAsString(parameters, self.POST_GRANULES, context) or '').strip()
+        if bool(pre_g) != bool(post_g):
+            raise QgsProcessingException('Give both the pre-fire and the post-fire granule ids, or neither.')
+        want_mtbs_pair = self.parameterAsEnum(parameters, self.PAIR, context) == PAIR_MTBS and not pre_g
+
+        # The WFIGS record's IRWIN id may name the MTBS fire before the dates are needed
+        source_layer = self.parameterAsSource(parameters, self.PERIMETER, context)
+        geom, crs = source_union(source_layer, 'burned-area')
+        if record is None:
+            wfigs = read_incident(source_layer)
+            if wfigs and wfigs.get('irwin'):
+                try:
+                    r = mtbs.by_irwin(mtbs.records(feedback), wfigs['irwin'])
+                except mtbs.MtbsError as e:
+                    feedback.pushInfo(f'MTBS records not available ({e}).')
+                    r = None
+                if r:
+                    record, record_how = r, f'matched by the WFIGS IRWIN id {wfigs["irwin"]}'
+        # Name and dates: as given, else from the perimeter's WFIGS record, else the MTBS record
+        # (stops on a layer of many fires); MTBS's own pair needs no end date
+        fire, start_d, end_d, incident = fire_details(
+            self, parameters, context, feedback, self.PERIMETER, self.FIRE_NAME, self.FIRE_START, self.FIRE_END,
+            mtbs_record=record, need_end=not (want_mtbs_pair and record is not None))
+        area = _area(geom, crs, context)
+        if record is None:
+            record, record_how = self._match(incident, geom, crs, start_d, end_d, area['area_ac'], context, feedback)
+            if record is not None and not fire:
+                fire = mtbs.display_name(record)
+        if record is not None:
+            feedback.pushInfo(f'MTBS record: {mtbs.describe(record)}; {record_how}.')
+        fire = fire or 'Fire'
+        start = QDate(start_d)
+        end = QDate(end_d) if end_d else QDate()
+        assessment = self.parameterAsEnum(parameters, self.ASSESSMENT, context)
         drafted = self.parameterAsEnum(parameters, self.PERIMETER_MODE, context) == DRAFTED
         source_index = self.parameterAsEnum(parameters, self.SOURCE, context)
         source = SOURCES[source_index][0]
         steps = QgsProcessingMultiStepFeedback(7 if drafted else 6, feedback)
         log, report = {}, {'fireanalysis_version': VERSION, 'created': datetime.datetime.now().isoformat(timespec='seconds'),
                            'fire': fire, 'fire_start': start.toString('yyyy-MM-dd'),
-                           'fire_end': end.toString('yyyy-MM-dd'), 'assessment': ASSESSMENTS[assessment],
+                           'fire_end': end.toString('yyyy-MM-dd') if end.isValid() else None,
+                           'assessment': ASSESSMENTS[assessment],
                            'imagery': SOURCES[source_index][1], 'incident': incident}
+        if record is not None:
+            report['mtbs'] = {k: record.get(k) for k in mtbs.PUBLISHED}
+            report['mtbs'].update({'how': record_how, 'perimeter_source': perimeter_source,
+                                   'thresholds_raw': mtbs.thresholds(record), 'pair_used': False})
 
         # Inputs, so a report says which perimeter and sub-areas it used
-        geom, crs = source_union(self.parameterAsSource(parameters, self.PERIMETER, context), 'burned-area')
         given = {k.lower(): self.parameterAsDouble(parameters, k, context)
                  for k in (self.LOW_T, self.MODERATE_T, self.HIGH_T) if parameters.get(k) not in (None, '')}
         report['inputs'] = {
@@ -308,17 +537,46 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
             'subarea_name': self.parameterAsString(parameters, self.SUBAREA_NAME, context) or None,
             'estimate': ESTIMATES[self.parameterAsEnum(parameters, self.ESTIMATE, context)],
             'thresholds_given': given,
-            'granules_given': bool((self.parameterAsString(parameters, self.PRE_GRANULES, context) or '').strip()),
+            'granules_given': bool(pre_g),
             'min_clear': self.parameterAsInt(parameters, self.MIN_CLEAR, context),
             'output_folder': folder,
             'perimeter_mode': PERIMETER_MODES[self.parameterAsEnum(parameters, self.PERIMETER_MODE, context)]}
+        if perimeter_source:
+            report['inputs']['perimeter']['layer'] = f'MTBS perimeter, {perimeter_source}'
 
-        # 1. Image pair
-        pre_g = (self.parameterAsString(parameters, self.PRE_GRANULES, context) or '').strip()
-        post_g = (self.parameterAsString(parameters, self.POST_GRANULES, context) or '').strip()
-        if bool(pre_g) != bool(post_g):
-            raise QgsProcessingException('Give both the pre-fire and the post-fire granule ids, or neither.')
-        if not pre_g:
+        # 1. Image pair: given ids; else MTBS's own dates; else the best suggested pair
+        fetch = {}  # label -> (ids, source key)
+        if pre_g:
+            report['pair'] = {'source': 'ids given'}
+            fetch = {'pre': (pre_g, source), 'post': (post_g, source)}
+        elif want_mtbs_pair and record is not None:
+            try:
+                pair = self._mtbs_pair(record, source, perimeter, context, feedback)
+            except mtbs.MtbsError as e:
+                pair = None
+                text = f'{e}; suggesting a pair instead.'
+                steps.pushWarning(text)
+                log.setdefault('pipeline', []).append('WARNING ' + text)
+            if pair:
+                fetch = {k: (v[0], v[1]) for k, v in pair.items()}
+                report['pair'] = {'source': f'MTBS\'s own scenes ({record.get("pre_id")}, {record.get("post_id")})',
+                                  'pre_date': pair['pre'][2], 'pre_sensor': pair['pre'][3],
+                                  'post_date': pair['post'][2], 'post_sensor': pair['post'][3]}
+                report['mtbs']['pair_used'] = True
+                kind = EXTENDED if 'extended' in str(record.get('asmnt_type', '')).lower() else INITIAL
+                if kind != assessment:
+                    feedback.pushInfo(f'Assessment: {ASSESSMENTS[kind]}, as MTBS\'s ({record.get("asmnt_type")}).')
+                    assessment = kind
+                    report['assessment'] = ASSESSMENTS[assessment]
+                labels = {s[0]: s[1].split(',')[0] for s in SOURCES}
+                for k, v in pair.items():
+                    feedback.pushInfo(f'MTBS {k}-fire scene: {v[3]} {v[2]} from {labels[v[1]]}: {v[0]}')
+        if not fetch:
+            if not end.isValid():
+                end = start
+                text = 'No fire end date (MTBS records have none); suggesting post-fire dates from the ignition date.'
+                steps.pushWarning(text)
+                log.setdefault('pipeline', []).append('WARNING ' + text)
             res = self._child(SuggestImagePairs(), {
                 'SOURCE': source_index, 'AOI': perimeter, 'FIRE_START': start, 'FIRE_END': end, 'ASSESSMENT': assessment,
                 'MIN_CLEAR': self.parameterAsInt(parameters, self.MIN_CLEAR, context), 'COUNT': 5,
@@ -328,25 +586,26 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
             best = next((f for f in layer.getFeatures() if int(float(str(f['rank']))) == 1), None) if layer else None
             if best is None:
                 raise QgsProcessingException('No image pair found; see the log, or give the granule ids.')
-            pre_g, post_g = str(best['pre_granules']), str(best['post_granules'])
+            fetch = {'pre': (str(best['pre_granules']), source), 'post': (str(best['post_granules']), source)}
             report['pair'] = {k: best[k] for k in ('pre_date', 'pre_sensor', 'pre_clear', 'post_date', 'post_sensor',
                                                    'post_clear', 'doy_gap', 'years')}
             report['pair']['source'] = 'Suggest image pairs, rank 1 (others in image_pairs.csv)'
-        else:
-            report['pair'] = {'source': 'ids given'}
-        report['pair'].update({'pre_granules': pre_g.split(), 'post_granules': post_g.split()})
+        report['pair'].update({'pre_granules': fetch['pre'][0].split(), 'post_granules': fetch['post'][0].split(),
+                               'fetched_from': {k: v[1] for k, v in fetch.items()}})
         steps.setCurrentStep(1)
 
         # 2. NBR for both dates
         nbr = {}
-        for label, granules in (('pre', pre_g), ('post', post_g)):
+        keys = [s[0] for s in SOURCES]
+        for label in ('pre', 'post'):
+            granules, used = fetch[label]
             params = {'AOI': perimeter, 'NBR': os.path.join(folder, f'nbr_{label}.tif')}
             if label == 'post':
                 params['REFLECTANCE'] = os.path.join(folder, 'reflectance_post.tif')
-            if source == 'hls':
+            if used == 'hls':
                 res = self._child(FetchHlsNbr(), dict(params, GRANULES=granules), context, steps, log)
             else:
-                res = self._child(FetchPlanetaryNbr(), dict(params, ITEMS=granules, SOURCE=source_index - 1),
+                res = self._child(FetchPlanetaryNbr(), dict(params, ITEMS=granules, SOURCE=keys.index(used) - 1),
                                   context, steps, log)
             nbr[label] = res['NBR']
         steps.setCurrentStep(2)
@@ -393,6 +652,11 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
         params = {'DNBR': dnbr, 'PRE_NBR': nbr['pre'], 'PERIMETER': perimeter, 'ASSESSMENT': assessment,
                   'ESTIMATE': self.parameterAsEnum(parameters, self.ESTIMATE, context),
                   'OUTPUT': os.path.join(folder, 'dnbr6.tif')}
+        if record is not None:
+            params['MTBS_FIRE'] = record['event_id']
+            # the record is in hand: let Classify severity read it from the perimeter when that carries it
+            if not drafted and read_mtbs(self.parameterAsSource({self.PERIMETER: perimeter}, self.PERIMETER, context)):
+                params['MTBS_FIRE'] = None
         for k in (self.LOW_T, self.MODERATE_T, self.HIGH_T):
             if parameters.get(k) not in (None, ''):
                 params[k] = self.parameterAsDouble(parameters, k, context)
@@ -401,10 +665,13 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
         low, moderate, high = res['LOW_T'], res['MODERATE_T'], res['HIGH_T']
         report['thresholds'] = {'low': low, 'moderate': moderate, 'high': high,
                                 'notes': [m for m in log.get('classifyseverity', []) if 'threshold:' in m]}
-        # Cross-check: the other estimate method, for the report only
         method = params['ESTIMATE']
+        report['thresholds']['from_mtbs'] = any('; MTBS ' in m or 'MTBS mapped no' in m
+                                                for m in report['thresholds']['notes'])
+        # Cross-check: another estimate method, for the report only (MTBS's own against nearby fires)
         if any(parameters.get(k) in (None, '') for k in (self.LOW_T, self.MODERATE_T, self.HIGH_T)):
-            other = OWN_DATA if method == NEARBY else NEARBY
+            other = NEARBY if report['thresholds']['from_mtbs'] else (OWN_DATA if method in (NEARBY, FIRE_MTBS)
+                                                                       else NEARBY)
             try:
                 alt = self._child(ClassifySeverity(), dict(params, ESTIMATE=other, OUTPUT=QgsProcessing.TEMPORARY_OUTPUT),
                                   context, steps, {})
@@ -418,6 +685,8 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
                     log.setdefault('pipeline', []).append('WARNING ' + text)
             except QgsProcessingException as e:
                 report['thresholds']['alternative'] = {'method': ESTIMATES[other], 'error': str(e)}
+        if record is not None and self.parameterAsBool(parameters, self.MTBS_COMPARE, context):
+            report['mtbs']['comparison'] = self._compare(record, classes, folder, feedback, log)
         steps.setCurrentStep(4)
 
         # 5. Area summary per class and zone (MTBS classes 1-4; increased greenness counts as unburned to low)
@@ -534,6 +803,50 @@ def _incident_html(r):
             'dates the run used unless you gave them.</p><table>' + body + '</table>')
 
 
+def _mtbs_html(r):
+    """The MTBS section: the fire's MTBS record, what the run took from it, and the
+    comparison with MTBS's published classes."""
+    e = html.escape
+    m = r.get('mtbs')
+    if not m:
+        return ''
+
+    def x1000(v):
+        return '' if v is None else ('none' if abs(v) >= 9999 else f'{v:.0f}')
+    used = []
+    if m.get('perimeter_source'):
+        used.append(f'perimeter ({m["perimeter_source"]})')
+    if m.get('pair_used'):
+        used.append('image dates')
+    if (r.get('thresholds') or {}).get('from_mtbs'):
+        used.append('thresholds (moved to this pair\'s offset)')
+    rows = [('Fire', f'{m.get("incid_name") or ""} ({m.get("event_id")})'),
+            ('How found', m.get('how') or ''),
+            ('Ignition', m.get('ig_date') or ''),
+            ('Assessment', f'{m.get("asmnt_type") or ""}, {m.get("map_prog") or ""}'.strip(', ')),
+            ('MTBS burned area', f'{m["burnbndac"]:,.0f} ac' if m.get('burnbndac') else ''),
+            ('MTBS scenes', f'pre {m.get("pre_id") or "?"}, post {m.get("post_id") or "?"}'),
+            ('MTBS offset and thresholds (x1000)',
+             f'offset {x1000(m.get("dnbr_offst"))}; low {x1000(m.get("low_t"))}, moderate {x1000(m.get("mod_t"))}, '
+             f'high {x1000(m.get("high_t"))}'),
+            ('Used in this run', ', '.join(used) if used else 'nothing (given or other choices)')]
+    body = ''.join(f'<tr><td>{e(k)}</td><td style="text-align:left">{e(str(v))}</td></tr>' for k, v in rows if v)
+    out = ['<h2>MTBS record</h2><p class="note">From the MTBS fire records (USGS), which the plugin fetches and '
+           'caches.</p><table>' + body + '</table>']
+    c = m.get('comparison')
+    if c and 'agreement' in c:
+        cls = ''.join(f'<tr><td>{e(name)}</td><td>{a:.1f}</td><td>{b:.1f}</td></tr>'
+                      for name, a, b in zip(CLASS_LABELS, c['ours'], c['theirs']))
+        out.append(f'<h3>Compared with MTBS\'s published classes</h3><p>{c["agreement"]:.1f} % of {c["pixels"]:,} '
+                   f'pixels agree (kappa {c["kappa"]:.3f}); {c["within_one"]:.1f} % within one class. '
+                   '<span class="note">Pixels both mapped, inside the burned area; MTBS\'s classes are in '
+                   'mtbs_dnbr6.tif.</span></p><table><tr><th>Class</th><th>% ours</th><th>% MTBS</th></tr>'
+                   f'{cls}</table>')
+    elif c and c.get('note'):
+        out.append(f'<p class="note">Comparison with MTBS\'s published classes: {e(c["note"])}.</p>')
+    return ''.join(out)
+
+
 def _inputs_html(r):
     """The Inputs section: which perimeter and sub-area layers the run used."""
     e = html.escape
@@ -561,6 +874,7 @@ def _inputs_html(r):
                f'<p>Outline (imagery window and offset ring): {layer(i.get("perimeter"))}</p>']
     else:
         out = [f'<h2>Inputs</h2><p>Burned area: {layer(i.get("perimeter"))}</p>']
+    out.insert(0, _mtbs_html(r))
     out.insert(0, _incident_html(r))
     if i.get('subareas'):
         how = (f'one zone per value of <code>{e(i["subarea_field"])}</code>' if i.get('subarea_field')
@@ -601,16 +915,21 @@ def _html(r, fields, rows):
             return f'{v} {unit}' + ('' if str(v) == '1' else 's')
         gap = (f'{n_of(pair["years"], "year")} apart, {n_of(pair["doy_gap"], "day")} apart in the season'
                if pair.get('years') else '')
-        dates = (f'<p>Pre-fire {e(str(pair["pre_date"]))} ({e(str(pair["pre_sensor"]))}, {e(str(pair["pre_clear"]))} % clear '
-                 f'inside the area); post-fire {e(str(pair["post_date"]))} ({e(str(pair["post_sensor"]))}, '
-                 f'{e(str(pair["post_clear"]))} % clear){"; " + gap if gap else ""}.</p>')
+        def one(k):
+            clear = f', {e(str(pair[k + "_clear"]))} % clear inside the area' if pair.get(k + '_clear') else ''
+            return f'{e(str(pair[k + "_date"]))} ({e(str(pair[k + "_sensor"]))}{clear})'
+        dates = f'<p>Pre-fire {one("pre")}; post-fire {one("post")}{"; " + gap if gap else ""}.</p>'
     # 3. the validation note only when a threshold was estimated
     given = (r.get('inputs') or {}).get('thresholds_given') or {}
     estimated_note = '' if len(given) == 3 else (
+        '<p class="note">MTBS\'s own thresholds for this fire, each taken relative to MTBS\'s offset and moved to '
+        'this pair\'s: on 17 MTBS fires, MTBS\'s thresholds on our dNBR reproduced MTBS\'s classes at a mean kappa '
+        'of 0.78.</p>' if t.get('from_mtbs') else
+        (
         '<p class="note">Estimated thresholds are a starting point: on 21 MTBS fires the nearby-fire estimate '
         '(moved to each pair\'s offset) reproduces MTBS\'s classes at a mean kappa of about 0.61, against 0.75 with '
         'MTBS\'s own thresholds. Check them against the imagery (reflectance_post.tif, SWIR2/NIR/red) and field '
-        'data.</p>')
+        'data.</p>'))
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>{e(r["fire"])} burn severity</title>
 <style>body{{font:15px/1.5 system-ui,sans-serif;max-width:52rem;margin:2rem auto;padding:0 1rem;color:#222;background:#fff}}
@@ -618,7 +937,7 @@ table{{border-collapse:collapse;margin:.5rem 0 1.5rem}}td,th{{border:1px solid #
 th{{background:#f3f3f3}}td:first-child,th:first-child{{text-align:left}}h1{{font-size:1.6rem}}h2{{font-size:1.15rem;margin-top:2rem}}
 code{{font-size:.85em}}.note{{color:#555}}</style></head><body>
 <h1>{e(r["fire"])}: burn severity</h1>
-<p>Fire {e(r["fire_start"])} to {e(r["fire_end"])}, {e(_lower_first(r["assessment"]))}. Wildfire Analysis Toolkit {e(r["fireanalysis_version"])}, {e(r["created"])}.</p>
+<p>Fire {e(r["fire_start"])} to {e(r["fire_end"] or "(end not recorded)")}, {e(_lower_first(r["assessment"]))}. Wildfire Analysis Toolkit {e(r["fireanalysis_version"])}, {e(r["created"])}.</p>
 {_inputs_html(r)}
 <h2>Severity by class</h2>
 {_chart(fields, rows, zones)}

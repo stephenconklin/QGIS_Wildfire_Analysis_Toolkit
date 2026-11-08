@@ -268,7 +268,7 @@ if len(granule_ids) == 2:
     folder = os.path.join(OUT, "pipeline_auto")
     res, _, log = _run(BurnSeverityPipeline(), {
         "PERIMETER": AOI, "FIRE_NAME": "Dragon Bravo", "FIRE_START": QDate(2025, 7, 4), "FIRE_END": QDate(2025, 9, 1),
-        "OUTPUT_FOLDER": folder})
+        "PAIR": 1, "OUTPUT_FOLDER": folder})
     check("pipeline with a suggested pair: runs", res is not None, " | ".join(log[-5:]))
     if res is not None:
         with open(os.path.join(folder, "report.json"), encoding="utf-8") as f:
@@ -281,7 +281,7 @@ if len(granule_ids) == 2:
     folder = os.path.join(OUT, "pipeline_pc")
     res, _, log = _run(BurnSeverityPipeline(), {
         "PERIMETER": AOI, "FIRE_NAME": "Dragon Bravo", "SOURCE": 1, "FIRE_START": QDate(2025, 7, 4),
-        "FIRE_END": QDate(2025, 9, 1), "OUTPUT_FOLDER": folder})
+        "FIRE_END": QDate(2025, 9, 1), "PAIR": 1, "OUTPUT_FOLDER": folder})
     check("pipeline from Planetary Computer Landsat: runs", res is not None, " | ".join(log[-5:]))
     if res is not None:
         with open(os.path.join(folder, "report.json"), encoding="utf-8") as f:

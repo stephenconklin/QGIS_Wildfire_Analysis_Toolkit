@@ -707,6 +707,137 @@ check("report: the estimated-threshold note only when a threshold was estimated"
       "Estimated thresholds are a starting point" in _html(dict(rep, inputs={"thresholds_given": {}}), fields, rows)
       and "Estimated thresholds are a starting point" not in _html(rep, fields, rows))
 
+# ---- MTBS records (offline: synthetic records, no download) ----------------------
+import datetime  # noqa: E402
+from fireanalysis import mtbs as mtbs_records  # noqa: E402
+from fireanalysis.incident import read_mtbs  # noqa: E402
+from fireanalysis.algorithms.burn_severity_pipeline import _mtbs_html  # noqa: E402
+from qgis.core import QgsFeature, QgsField, QgsPointXY  # noqa: E402
+from qgis.PyQt.QtCore import QMetaType  # noqa: E402
+
+sc = mtbs_records.parse_scene("803503420170919")
+check("MTBS scene id: Landsat 8 path/row and date, HLS L30",
+      (sc["platform"], sc["where"], sc["date"], sc["hls"], sc["planetary"]) ==
+      ("landsat-8", "35/34", datetime.date(2017, 9, 19), "L30", "landsat"), str(sc))
+sc = mtbs_records.parse_scene("C12SUF20260620_30m")
+check("MTBS scene id: Sentinel-2C tile and date, HLS S30",
+      (sc["platform"], sc["where"], sc["date"], sc["hls"]) == ("sentinel-2c", "12SUF", datetime.date(2026, 6, 20), "S30"),
+      str(sc))
+sc = mtbs_records.parse_scene("503403520110624")
+check("MTBS scene id: Landsat 5 is not in HLS (Planetary Computer only)", sc["hls"] is None and sc["planetary"] == "landsat")
+try:
+    mtbs_records.parse_scene("X")
+    bad = False
+except ValueError:
+    bad = True
+check("MTBS scene id: anything else is refused", bad)
+
+DRAGON = {"event_id": "AZ3623811210320250704", "irwinid": "EC1EC492-0C76-4B92-8960-D18A13405F1C",
+          "incid_name": "DRAGON BRAVO", "incid_type": "Wildfire", "asmnt_type": "Extended", "burnbndac": 148455,
+          "burnbndlat": "36.35300970204768", "burnbndlon": "-112.0524556472839", "ig_date": "2025-07-04",
+          "pre_id": "B12SUF20250620_30m", "post_id": "C12SUF20260620_30m", "dnbr_offst": 22.0, "dnbr_stddv": 26.0,
+          "low_t": 66, "mod_t": 216, "high_t": 471, "map_prog": "MTBS"}
+recs = [mtbs_records.record(DRAGON),
+        mtbs_records.record(dict(DRAGON, event_id="AZ3623811210320250999", incid_name="DRAGON", ig_date="2018-06-01",
+                                 irwinid="X", burnbndac=500, high_t=9999)),
+        mtbs_records.record(dict(DRAGON, event_id="CO3746110780820180601", incid_name="416", ig_date="2018-06-01",
+                                 burnbndlat="37.494", burnbndlon="-107.905", irwinid="Y", incid_type="Prescribed Fire"))]
+r = recs[0]
+check("MTBS record: year, centre and map-service keys", r["year"] == 2025 and abs(r["lon"] + 112.0525) < 1e-3
+      and r["fire_id"] == r["event_id"] and r["low_threshold"] == 66 and mtbs_records.display_name(r) == "Dragon Bravo")
+t0 = mtbs_records.thresholds(r)
+t1 = mtbs_records.thresholds(r, 0.036)
+check(f"MTBS thresholds: raw {t0}, at this pair's offset {[round(x, 3) for x in t1]}",
+      t0 == [0.066, 0.216, 0.471] and [round(x, 4) for x in t1] == [0.08, 0.23, 0.485])
+check("MTBS thresholds: 9999 is no class (9.999)", mtbs_records.thresholds(recs[1])[2] == 9.999)
+check("MTBS search: name and year", [x["event_id"] for x in mtbs_records.search(recs, "Dragon Bravo 2025")]
+      == ["AZ3623811210320250704"])
+check("MTBS search: whole words ('Dragon' finds both, exact name first)",
+      [x["incid_name"] for x in mtbs_records.search(recs, "dragon")] == ["DRAGON", "DRAGON BRAVO"])
+check("MTBS search: event id", len(mtbs_records.search(recs, "co3746110780820180601")) == 1)
+check("MTBS search: wildfires only, years", [x["incid_name"] for x in mtbs_records.search(
+    recs, first_year=2018, last_year=2018, wildfires_only=True)] == ["DRAGON"])
+check("MTBS resolve: exact name wins over a longer one", mtbs_records.resolve(recs, "Dragon")["incid_name"] == "DRAGON")
+try:
+    mtbs_records.resolve(recs + [mtbs_records.record(dict(DRAGON, event_id="AZ1", ig_date="2020-01-01"))],
+                         "Dragon Bravo")
+    msg = ""
+except mtbs_records.MtbsError as e:
+    msg = str(e)
+check("MTBS resolve: several matches are listed, asking for the year", "2 MTBS fires match" in msg and "add the year" in msg,
+      msg)
+check("MTBS by IRWIN id: braces and case don't matter",
+      mtbs_records.by_irwin(recs, "{ec1ec492-0c76-4b92-8960-d18a13405f1c}")["event_id"] == "AZ3623811210320250704")
+box = QgsGeometry.fromWkt("POLYGON((-112.3 36.1, -111.8 36.1, -111.8 36.6, -112.3 36.6, -112.3 36.1))")
+found = mtbs_records.by_location(recs, box, datetime.date(2025, 7, 1), datetime.date(2025, 9, 1), 140000)
+check("MTBS by location and date: the fire centred inside that ignited between the dates",
+      [x["event_id"] for x in found] == ["AZ3623811210320250704"])
+check("MTBS by location: no match outside the dates",
+      mtbs_records.by_location(recs, box, datetime.date(2010, 1, 1), datetime.date(2010, 2, 1)) == [])
+
+# read_mtbs: a perimeter layer with MTBS fields (the USGS file, or Find MTBS fires output)
+def mtbs_layer(rows):
+    lyr = QgsVectorLayer("Polygon?crs=EPSG:26912", "mtbs", "memory")
+    names = ["event_id", "incid_name", "ig_date", "asmnt_type", "pre_id", "post_id", "irwinid"]
+    nums = ["low_t", "mod_t", "high_t", "dnbr_offst", "burnbndac"]
+    lyr.dataProvider().addAttributes([QgsField(n, QMetaType.Type.QString) for n in names]
+                                     + [QgsField(n, QMetaType.Type.Double) for n in nums])
+    lyr.updateFields()
+    geom = next(QgsVectorLayer(BURN, "b", "ogr").getFeatures()).geometry()
+    for row in rows:
+        f = QgsFeature(lyr.fields())
+        f.setGeometry(geom)
+        for n in names + nums:
+            f[n] = row.get(n)
+        lyr.dataProvider().addFeature(f)
+    return lyr
+
+
+one = mtbs_layer([DRAGON])
+rec = read_mtbs(one)
+check("MTBS layer: the record is read from its fields", rec and rec["event_id"] == "AZ3623811210320250704"
+      and rec["low_t"] == 66 and rec["year"] == 2025)
+try:
+    read_mtbs(mtbs_layer([DRAGON, dict(DRAGON, event_id="CO3746110780820180601")]))
+    msg = ""
+except Exception as e:
+    msg = str(e)
+check("MTBS layer with several fires is refused", "several MTBS fires" in msg, msg)
+check("non-MTBS layer: no MTBS record", read_mtbs(QgsVectorLayer(BURN, "b", "ogr")) is None)
+
+# Classify severity with the fire's own MTBS thresholds, read from the perimeter layer
+QgsProject.instance().addMapLayer(one)
+res, log = _run(ClassifySeverity(), {"DNBR": T + "dnbr.tif", "PERIMETER": one.id(), "OFFSET": 0.036,
+                                     "OUTPUT": os.path.join(OUT, "mtbs_classes.tif")})
+check("classify, MTBS thresholds (default): the record's, moved to the offset (0.080 / 0.230 / 0.485)",
+      res is not None and [round(res[k], 3) for k in ("LOW_T", "MODERATE_T", "HIGH_T")] == [0.08, 0.23, 0.485]
+      and any("; MTBS AZ3623811210320250704: 66 with MTBS offset 22" in m for m in log), " | ".join(log))
+ds = gdal.Open(os.path.join(OUT, "mtbs_classes.tif")) if res else None
+check("classify, MTBS thresholds: the event id in the raster metadata",
+      ds is not None and ds.GetMetadata().get("MTBS_EVENT_ID") == "AZ3623811210320250704")
+QgsProject.instance().removeMapLayer(one.id())
+
+# compare(): agreement and kappa
+ours = np.array([[1, 2, 3, 4], [1, 2, 3, 4], [0, 0, 6, 5]], np.uint8)
+theirs = np.array([[1, 2, 3, 3], [1, 2, 4, 4], [1, 1, 1, 5]], np.uint8)
+c = mtbs_records.compare(ours, theirs, ours > 0)
+check(f"compare with MTBS: agreement {c and round(c['agreement'], 1)} % over 9 px, within one class 100 %",
+      c and c["pixels"] == 9 and abs(c["agreement"] - 700 / 9) < 1e-9 and c["within_one"] == 100.0 and -1 < c["kappa"] < 1)
+check("compare with MTBS: no overlap gives None", mtbs_records.compare(ours, np.zeros_like(ours), ours > 0) is None)
+
+# Report: the MTBS section
+rep2 = dict(rep, mtbs={**{k: DRAGON.get(k) for k in mtbs_records.PUBLISHED}, "how": "named in MTBS fire",
+                       "perimeter_source": "MTBS map service (USFS EDW)", "pair_used": True,
+                       "comparison": {"pixels": 9, "agreement": 77.8, "kappa": 0.7, "within_one": 100.0,
+                                      "ours": [20, 20, 20, 20, 20], "theirs": [20, 20, 20, 20, 20]}},
+            thresholds=dict(rep["thresholds"], from_mtbs=True), inputs={"thresholds_given": {}})
+page = _html(rep2, fields, rows)
+check("report: MTBS record, what was used, and the comparison",
+      "<h2>MTBS record</h2>" in page and "AZ3623811210320250704" in page and "image dates" in page
+      and "thresholds (moved to this pair" in page and "kappa 0.700" in page
+      and "own thresholds for this fire, each taken relative" in page, page[page.find("MTBS record"):][:600])
+check("report: no MTBS section without a record", "<h2>MTBS record</h2>" not in _html(rep, fields, rows))
+
 print(f"\n{'ALL PASSED' if not failed else f'{failed} FAILED'}")
 if _app is not None:
     _app.exitQgis()

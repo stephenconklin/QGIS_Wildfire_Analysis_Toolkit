@@ -251,3 +251,65 @@ the MTBS perimeter). Inside a generous outline (MTBS perimeter + 5 km), keeping
 patches of at least 25 % (or 10 %) of the largest gives IoU 0.78, against 0.74
 for all patches; the largest patch alone fails on Las Conchas (0.02). The
 validation folders were temporary (`$TMPDIR/fireanalysis_mtbs_*`).
+
+## Plan 2.1: MTBS fire records without a manual download (agreed, built and released in 2.1.0, 2026-11-08)
+
+Goal: users name an MTBS fire (or give any perimeter) and the plugin fetches the
+MTBS record itself: name, ignition date, assessment, MTBS's image pair, offset,
+thresholds and, when needed, the perimeter.
+
+**Sources checked 2026-11-08.**
+
+| Source | Size | Currency | Use |
+|---|---|---|---|
+| USGS `.../MTBS_Fire/data/composite_data/fod_pt_shapefile/mtbs_fod_pts_data.zip` | 3.5 MB | updated daily-ish (Last-Modified 2026-11-08); 31,514 fires, 420 with ignition in 2025–2026 | every attribute, one point per fire |
+| USGS `.../burned_area_extent_shapefile/mtbs_perimeter_data.zip` | 420 MB zip, 677 MB .shp | same date | perimeters; all entries deflated, so no reading one feature by range requests |
+| USFS EDW MapServer (`mtbs.py` today) | per query | behind: 90 fires from 2025 on (layers 84, 86), no Dragon Bravo | perimeter of one fire by `fire_id` |
+| MTBS CONUS ImageServer | per query | `dnbr6` through 2024 | comparison with MTBS's classes |
+
+Both USGS zips: no login, `accept-ranges: bytes`, Last-Modified for conditional
+refresh. Shapefile fields (lowercase): `event_id`, `irwinid`, `incid_name`,
+`incid_type`, `map_prog`, `asmnt_type`, `burnbndac`, `burnbndlat/lon` (text),
+`ig_date` (text `YYYY-MM-DD`), `pre_id`, `post_id`, `perim_id`, `dnbr_offst`,
+`dnbr_stddv`, `nodata_t`, `incgreen_t`, `low_t`, `mod_t`, `high_t` (x1000,
+9999 = no class), `comment`. NAD83 geographic. Dragon Bravo 2025:
+`AZ3623811210320250704`, extended, pre `B12SUF20250620_30m`, post
+`C12SUF20260620_30m` (Sentinel-2C; HLS has S30 for 2026-06-20 over the fire),
+offset 22, thresholds 66 / 216 / 471. `irwinid` matches WFIGS `attr_IrwinID`.
+
+**Decisions.**
+
+- Records cache: the 3.5 MB points zip, downloaded into the QGIS profile
+  (`<profile>/wildfire_analysis_toolkit/mtbs/`), converted to an indexed
+  GeoPackage. A HEAD check at most once a day; download again only when
+  Last-Modified changed; offline, use the cache. Replaces the MapServer for
+  nearby-fire thresholds (MapServer stays as a fallback).
+- Perimeter of a named fire: MapServer by `fire_id` when it has it; else the
+  full perimeter file, downloaded only when the user has ticked "allow the
+  large MTBS download" (420 MB, once, then cached and refreshed like the
+  records); else the user's polygon or a perimeter drafted from dNBR inside the
+  fire's bounds.
+- Entry points, both: an optional *MTBS fire* field in the pipeline (event id,
+  or name and year), and a new *Find MTBS fires* algorithm (name, year range,
+  area; points, or perimeters where available) whose output feeds the pipeline.
+  Without either, the pipeline matches the given perimeter to its MTBS record by
+  `irwinid` (WFIGS input) or an MTBS fire point inside it with a compatible date.
+- With an MTBS record the pipeline uses MTBS's pre/post dates by default, and
+  Classify severity / the pipeline gain a threshold choice "this fire's MTBS
+  thresholds", moved to our pair's offset (appended to `ESTIMATE`). The report
+  gets an MTBS record section, and for fires through 2024 an optional
+  comparison with MTBS's `dnbr6` (code from `dev/mtbs_validation.py`).
+- MTBS scene ids gain Sentinel-2C (`C...`).
+
+**Phases.** (1) records cache, nearby thresholds from it, *Find MTBS fires*,
+Sentinel-2C ids; (2) pipeline *MTBS fire*, auto-match, MTBS's image pair, MTBS
+thresholds option, report section; (3) opt-in perimeter download and cache,
+comparison with MTBS classes. Release as 2.1.0 (new features, no breaking
+changes; enums appended only).
+
+**Built (2.1.0).** All three phases. Tested with `dev/mtbs_test.py` on QGIS 4.2.3: Tunnel 2022
+from its fire id alone agrees with MTBS's published classes at kappa 0.752 (87.2 %); Dragon Bravo 2025
+from its name, with the 420 MB file (43 s to fetch and unzip), runs end to end. HLS has no tile 12SUF
+around 2026-06-20 although MTBS's post-fire scene is `C12SUF20260620`: when HLS lacks MTBS's tile, both
+scenes come from Planetary Computer, so the pair is processed alike (HLS vs L2A differ by about 0.03
+NBR). Web page update: `docs/WEBSITE_PROMPT.md`, a prompt for a session in the website repository.

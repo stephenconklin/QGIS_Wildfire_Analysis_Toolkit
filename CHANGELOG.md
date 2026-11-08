@@ -1,8 +1,21 @@
 # Changelog
 
+## 2.1.0 — 2026-11-08
+
+MTBS fire records without a manual download. The first version uploaded to plugins.qgis.org. Development builds were `2.1.0-dev.1` and `2.1.0-dev.2`.
+
+- **Find MTBS fires** (`fireanalysis:findmtbsfires`, new group **Fire records**). Looks up the 31,000+ fires MTBS has mapped since 1984 by name, id, years or area, with the whole MTBS record (ignition date, assessment, MTBS's pre- and post-fire scenes, dNBR offset, thresholds, IRWIN id), as perimeters or points. The output keeps MTBS's field names, so one selected fire goes straight into the pipeline.
+- **The plugin fetches MTBS data itself.** The USGS MTBS fire records file (3.5 MB) is downloaded on first use and cached in the QGIS profile, checked for a newer copy at most once a day, and used offline from the cache. Perimeters come from the MTBS map service, or, for fires it doesn't have yet, from the full USGS perimeter file, a 420 MB download made only when the user allows it, then cached.
+- **Pipeline from an MTBS fire.** New *MTBS fire* field (id, or name and year); the burned-area polygons become optional. With an MTBS fire, or a perimeter that is one (the MTBS file, *Find MTBS fires* output), the pipeline uses its perimeter, name and ignition date, MTBS's own image pair and assessment type (Advanced *Image pair*, `PAIR`: MTBS's dates by default, or always suggested), and MTBS's thresholds. Other perimeters are matched to their MTBS record by the WFIGS IRWIN id, or by an MTBS fire centred inside them that ignited between their dates. New Advanced `MTBS_DOWNLOAD` (allow the 420 MB file) and `MTBS_COMPARE`.
+- **Comparison with MTBS's published classes** for fires through 2024: agreement, kappa and the share per class in the report, and MTBS's classes as `mtbs_dnbr6.tif` (loaded switched off). The report gets an *MTBS record* section. Tunnel 2022 from its fire id alone: kappa 0.75 against MTBS (87 % of pixels agree), in 23 seconds.
+- **Classify severity: "This fire's own MTBS thresholds"** (`ESTIMATE` 2, the new default in Classify severity and the pipeline): MTBS's published thresholds for the fire, each taken relative to MTBS's offset and moved to this pair's; nearby MTBS fires when MTBS hasn't mapped the fire. New Advanced `MTBS_FIRE`. The raster metadata records `MTBS_EVENT_ID`.
+- **Nearby-fire thresholds from the cached records** instead of the map service: more current (420 fires from 2025 on, against 90 in the map service) and no dropped connections; the map service stays as the fallback. Fires now count by their burned-area centre within the radius.
+- MTBS scene ids for **Sentinel-2C** (`C…`), which MTBS uses for 2025 fires such as Dragon Bravo. When NASA HLS lacks the tile MTBS used (HLS has no 12SUF around Dragon Bravo's 2026-06-20 post-fire date), or its search fails, both of MTBS's scenes come from Planetary Computer, so the pair is processed alike. With Landsat or Sentinel-2 (Planetary Computer) chosen as the imagery, MTBS's scenes are used only when they are that sensor's; otherwise a pair is suggested from the chosen imagery. Dragon Bravo 2025 from its name alone: 148,539 ac, 8.6 / 27.4 / 40.6 / 23.4 % unburned-low / low / moderate / high with MTBS's thresholds.
+- `dev/mtbs_test.py`: online test of the records cache, lookup, *Find MTBS fires*, matching and the pipeline from a fire id (`--download` adds the 420 MB file and Dragon Bravo 2025). `dev/pipeline_test.py` covers the MTBS code offline on synthetic records.
+
 ## 2.0.0 — 2026-11-08
 
-First release on plugins.qgis.org. Development builds were numbered `2.0.0-dev.1` (2026-10-06) to `2.0.0-dev.4`; the plugin's version, the run logs and `report.json` show which build made a result.
+Tagged on GitHub (`v2.0.0`) but not uploaded to plugins.qgis.org; 2.1.0 is the first upload. Development builds were numbered `2.0.0-dev.1` (2026-10-06) to `2.0.0-dev.4`; the plugin's version, the run logs and `report.json` show which build made a result.
 
 The plugin becomes a fire analysis pipeline (plan in `docs/DESIGN.md`) and is renamed the **Wildfire Analysis Toolkit**: plugin name, Toolbox provider and zip folder (`wildfire_analysis_toolkit`). The provider id stays `fireanalysis`, so algorithm ids are unchanged. The standalone script becomes Burn severity summary 1.2.0: same parameters, outputs and results, with only the QGIS 3.44 minimum below.
 

@@ -6,6 +6,10 @@ discovery, containment, control and fire-out dates, size, cause and ignition
 point. Field names are matched with or without the poly_/attr_ prefix and
 case-insensitively, so the Current, Year-to-date and archive layers all work.
 Dates may be date-times, text (GeoJSON exports) or epoch milliseconds (Esri JSON).
+
+MTBS perimeters and records (the USGS files, or Find MTBS fires output) carry the
+MTBS record instead: read_mtbs returns it, and fire_details uses its name and
+ignition date when nothing better is given.
 """
 import datetime
 import re
@@ -136,6 +140,7 @@ def read_incident(source):
         return to_date(v, lon)
     info = {'source': 'WFIGS Interagency Fire Perimeters', 'features': source.featureCount(), 'fires': fires,
             'name': str(get(f, NAME) or '').strip() or None, 'id': get(f, ID),
+            'irwin': str(get(f, ('IrwinID',)) or '').strip('{} ').upper() or None,
             'start': day(f[start_field]), 'start_field': start_field,
             'acres': _number(get(f, ACRES)), 'perimeter_date': day(get(f, ('PolygonDateTime',))),
             'ignition': ignition, 'dates': 'local solar time at longitude {:.2f}'.format(lon) if lon is not None
@@ -167,12 +172,42 @@ def read_incident(source):
     return info
 
 
-def fire_details(alg, parameters, context, feedback, perimeter_param, name_param, start_param, end_param):
+def read_mtbs(source):
+    """The MTBS record of a perimeter layer whose fields are MTBS's (see mtbs.is_record),
+    or None. Stops when the layer holds several MTBS fires."""
+    from . import mtbs
+    if source is None or not mtbs.is_record(source.fields().names()):
+        return None
+    names = source.fields().names()
+    first, ids = None, set()
+    for f in source.getFeatures():
+        attrs = {n: (None if _empty(f[n]) else f[n]) for n in names}
+        ids.add(str(attrs.get(next(n for n in names if n.lower() == 'event_id')) or ''))
+        first = first or attrs
+        if len(ids - {''}) > 5:
+            break
+    if first is None:
+        return None
+    if len(ids - {''}) > 1:
+        shown = ', '.join(sorted(ids - {''})[:5]) + (', ...' if len(ids - {''}) > 5 else '')
+        raise QgsProcessingException(
+            f'The perimeter layer holds several MTBS fires ({shown}). Select one fire and tick "Selected '
+            'features only", or name the fire in the MTBS fire field.')
+    for k, v in list(first.items()):  # QDate / QDateTime from a GeoPackage -> ISO text
+        if hasattr(v, 'toString') and not isinstance(v, str):
+            first[k] = to_date(v).isoformat() if to_date(v) else None
+    return mtbs.record(first)
+
+
+def fire_details(alg, parameters, context, feedback, perimeter_param, name_param, start_param, end_param,
+                 mtbs_record=None, need_end=True):
     """(name, start, end, incident) for an algorithm, as datetime.date values: what
-    the user gave, else the perimeter's WFIGS record. name is None when neither has
-    one; name_param may be None. Stops when the layer holds several fires or a date
-    is missing."""
-    incident = read_incident(alg.parameterAsSource(parameters, perimeter_param, context))
+    the user gave, else the perimeter's WFIGS record, else mtbs_record (name and
+    ignition date; MTBS has no end date). name is None when none has one; name_param
+    may be None. end may be None when not need_end. Stops when the layer holds
+    several fires or a needed date is missing."""
+    incident = read_incident(alg.parameterAsSource(parameters, perimeter_param, context)) \
+        if parameters.get(perimeter_param) not in (None, '') else None
     if incident and len(incident['fires']) > 1:
         shown = ', '.join(incident['fires'][:5]) + (', ...' if len(incident['fires']) > 5 else '')
         raise QgsProcessingException(
@@ -204,11 +239,22 @@ def fire_details(alg, parameters, context, feedback, perimeter_param, name_param
             from .compat import warn
             warn(feedback, f'The fire end date {end} is an estimate (no containment, control or fire-out date in '
                            'the record). Set it if you know it.')
-    if start is None or end is None:
-        missing = ' and '.join(w for w, d in (('start', start), ('end', end)) if d is None)
+    if mtbs_record:
+        from . import mtbs
+        used = []
+        if name_param and not name and mtbs.display_name(mtbs_record):
+            name = mtbs.display_name(mtbs_record)
+            used.append(f'name {name}')
+        if start is None and to_date(mtbs_record.get('ig_date')):
+            start = to_date(mtbs_record.get('ig_date'))
+            used.append(f'ignition {start}')
+        if used:
+            feedback.pushInfo(f'From the MTBS record {mtbs_record.get("event_id")}: ' + '; '.join(used) + '.')
+    if start is None or (end is None and need_end):
+        missing = ' and '.join(w for w, d in (('start', start), ('end', end)) if d is None and (w == 'start' or need_end))
         raise QgsProcessingException(
-            f'Set the fire {missing} date: ' + ('the perimeter\'s record has none.' if incident
-                                               else 'the perimeter has no WFIGS fire record to read it from.'))
-    if end < start:
+            f'Set the fire {missing} date: ' + ('the fire\'s record has none.' if incident or mtbs_record
+                                               else 'the perimeter has no WFIGS or MTBS fire record to read it from.'))
+    if end is not None and end < start:
         raise QgsProcessingException(f'The fire end date ({end}) is before the start date ({start}).')
     return name or None, start, end, incident

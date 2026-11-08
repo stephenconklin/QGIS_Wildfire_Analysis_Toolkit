@@ -59,11 +59,12 @@ It picks an image pair, fetches both dates, and writes dNBR, the MTBS classes, t
 
 Version 2.0 grows the plugin into a fire analysis pipeline modeled on the MTBS [QGIS Fire Mapping Tool](https://www.mtbs.gov/qgis-fire-mapping-tool) (plan: [docs/DESIGN.md](docs/DESIGN.md)). Each step is a Processing algorithm, so the chain also runs in models, batch mode and `processing.run`:
 
+0. **Fire records** (group Fire records, since 2.1). *Find MTBS fires* looks up any of the 31,000+ fires MTBS has mapped since 1984, by name, id, years or area, with its whole MTBS record; the plugin downloads and caches the MTBS data itself (see *MTBS fires* below).
 1. **Imagery** (group Imagery). *Suggest image pairs* picks pre- and post-fire dates by the MTBS rules. *Find HLS scenes* and *Fetch HLS NBR* get calibrated, cloud-masked NBR from NASA's [Harmonized Landsat Sentinel-2](https://hls.gsfc.nasa.gov/) (HLS v2.0) archive, for just the area of interest; *Find / Fetch Landsat / Sentinel-2* do the same from Microsoft Planetary Computer (Landsat back to 1982); *Prepare local scene NBR* does it for Landsat or Sentinel-2 files you downloaded. All write NBR on the same grid.
 2. **Severity** (group Severity). *Build dNBR* makes dNBR, RdNBR and RBR and measures the unburned offset. *Draft burned-area perimeter* drafts the burned area from dNBR when there is no perimeter. *Classify severity (MTBS classes)* writes the MTBS thematic classes, with given or estimated thresholds.
 3. **Summary and map.** *Burn severity summary* (above) reports percent, hectares and acres per class and zone. *Severity map (PDF)* (group Pipeline) lays out the classes as an A4 map.
 
-**Burn severity (whole pipeline)** (group Pipeline) runs steps 1 to 3, except the map, in one go and writes a report.
+**Burn severity (whole pipeline)** (group Pipeline) runs steps 1 to 3, except the map, in one go and writes a report. Give it an MTBS fire's id or name and year and nothing else, and it fetches the perimeter, MTBS's image dates and thresholds itself, and compares the result with MTBS's published classes.
 
 Checked against 17 published MTBS fires: the imagery and calibration reproduce MTBS's classes (mean kappa 0.78); threshold estimates are a starting point (see *Validation against MTBS* below).
 
@@ -73,14 +74,18 @@ Checked against 17 published MTBS fires: the imagery and calibration reproduce M
 
 | Parameter | Description |
 |---|---|
-| Burned-area polygons | The fire, drawn along the burned edge; or, with *Burned area* drafted, a generous outline drawn around the whole fire. Also the area of interest for the imagery. |
+| Burned-area polygons | The fire, drawn along the burned edge; or, with *Burned area* drafted, a generous outline drawn around the whole fire. Also the area of interest for the imagery. Optional when *MTBS fire* is given: then the MTBS perimeter is fetched. |
+| MTBS fire | Optional. An MTBS fire id (`AZ3623811210320250704`) or name and year (`Dragon Bravo 2025`). See *MTBS fires*. |
 | Burned area | *As given* (default): the polygons are the burned area. *Drafted from dNBR inside the given polygons*: see below. |
 | Imagery | NASA HLS (default; 2013 on; Earthdata login), Landsat 4–9 Collection 2 (1982 on) or Sentinel-2 L2A, both from Planetary Computer without an account. |
-| Fire name | Zone name in the summary and the report. Empty: the incident name from a WFIGS perimeter, else *Fire*. |
-| Fire start, Fire end | Ignition and containment dates, for choosing the image pair. Empty: read from a WFIGS perimeter (see below). |
+| Fire name | Zone name in the summary and the report. Empty: the incident name from a WFIGS perimeter, else the MTBS record's, else *Fire*. |
+| Fire start, Fire end | Ignition and containment dates, for choosing the image pair. Empty: read from a WFIGS perimeter (see below), else the MTBS record's ignition date (MTBS records have no end date, and need none when MTBS's own image pair is used). |
 | Assessment | Initial (soon after the fire) or extended (next growing season). |
 | Sub-area polygons, name field, name | Optional zones for the summary, as in *Burn severity summary*. |
-| Estimate empty thresholds from; Low, Moderate, High threshold | As in *Classify severity*. |
+| Estimate empty thresholds from; Low, Moderate, High threshold | As in *Classify severity*. The default uses the fire's own MTBS thresholds when MTBS has mapped it. |
+| Image pair (Advanced) | *MTBS's own image dates when MTBS has mapped the fire, else suggested* (default), or *Always suggested*. |
+| Allow the one-time 420 MB MTBS perimeter download (Advanced) | Off by default. Needed only for fires the MTBS map service doesn't have yet (most fires of the last year or so); see *MTBS fires*. |
+| Compare with MTBS's published classes (Advanced) | On by default; for fires through 2024. |
 | Pre-fire, Post-fire granule or item ids (Advanced) | Skip the pair search and use these. |
 | Drafted burned area: dNBR above the offset, smallest patch, share of the largest (Advanced) | 0.05 above the dNBR offset, 20 ha, and 25 % of the largest patch (see below). |
 | Minimum clear share inside the area for a suggested pair (Advanced) | Default 95 %. Lower it when no pair is found for a cloudy area. |
@@ -92,6 +97,16 @@ Steps: *Suggest image pairs* (rank 1; all candidates in `image_pairs.csv`), *Fet
 When it finishes, the results load into one group per run, named after the fire and the date (*Ferris 2026-10-06*; *(2)* and so on for another run that day), top to bottom: *Burned area and sub-areas* (black and dashed blue outlines), *Drafted burned area (to edit)* when drafted, *Severity classes (MTBS)* in the MTBS colours, then switched off: dNBR (named with the thresholds), RdNBR and RBR on a green-to-red ramp, *Post-fire reflectance* in false colour (SWIR2 / NIR / red, 2–98 % stretch), and the pre- and post-fire NBR in grey. A rerun into the same folder reuses its group, reloads the layers and puts them back in this order and visibility.
 
 **Fire name and dates from WFIGS.** Perimeters from [WFIGS Interagency Fire Perimeters](https://data-nifc.opendata.arcgis.com/) (NIFC; the `poly_` and `attr_` fields of the service and its downloads, with or without the prefixes) carry the incident record. Select one fire in the layer and tick *Selected features only* (or export it), and leave the fire name and dates empty: the pipeline and *Suggest image pairs* read the incident name, the discovery date (`FireDiscoveryDateTime`) and the end date (`ContainmentDateTime`, else `ControlDateTime`, else `FireOutDateTime`). A fire without any of those gets the period end of its last ICS-209 report if it was 100 % contained by then, else the perimeter's own date, with a warning that the end date is an estimate. WFIGS stores UTC; dates are taken in local solar time at the ignition longitude, so a fire contained at 7 PM in Colorado is not moved to the next day. Anything you enter wins. The report's *Fire record* section lists the record: incident id, dates and the fields they came from, reported size, ignition point, mapping method and perimeter date, cause and location. A layer holding several fires stops with a message instead of mapping them all.
+
+**From an MTBS fire.** Type the fire's MTBS id, or its name and year, in *MTBS fire* and leave the polygons empty, or give one fire from *Find MTBS fires* or the MTBS perimeter file as the polygons. The pipeline then takes from the MTBS record:
+
+- the **perimeter** (`mtbs_perimeter.geojson`), from the MTBS map service, or for fires it lacks from the MTBS perimeter file when you allow that download;
+- the **name and ignition date**, unless you give them;
+- **MTBS's own image pair** (the pre- and post-fire scenes MTBS used) and its **assessment type**. With HLS chosen, both scenes come from HLS when it has them (Landsat 8/9 and Sentinel-2, including Sentinel-2C, on the very tile MTBS used); otherwise, as for Landsat 4–7, a tile HLS lacks, or the HLS search failing, both come from Planetary Computer, each from its own sensor's collection, so the pair is processed alike. With *Landsat* or *Sentinel-2* (Planetary Computer) chosen, MTBS's scenes are used only when they are that sensor's; otherwise a pair is suggested from the imagery you chose. If a scene can't be found, the pipeline suggests a pair instead and says so;
+- by default, **MTBS's thresholds**, each taken relative to MTBS's dNBR offset and moved to this pair's offset (thresholds are set on uncorrected dNBR, so they move with the offset);
+- for fires through 2024, a **comparison with MTBS's published classes** inside the burned area: agreement, kappa and the share per class, ours against MTBS's, in the report, and MTBS's classes as `mtbs_dnbr6.tif` (loaded switched off as *MTBS published classes*).
+
+The report's *MTBS record* section lists the record, how it was found and what the run used. A perimeter you give is matched to its MTBS record too: a WFIGS perimeter by its IRWIN id, any other by an MTBS fire centred inside it that ignited between its dates (the closest in size when several). For Tunnel 2022 (17,641 ac), the fire id alone ran in 23 seconds and agreed with MTBS's classes at kappa 0.75 (87 % of pixels).
 
 **Where the perimeter comes from.** The polygons do three jobs: they set the imagery window (with a 3 km buffer), the unburned ring for the dNBR offset (90–2090 m outside them), and the burned area that is classified and summarized. A generous hand-drawn outline is fine for the first two but inflates *Unburned to low* in the third. The best burned area is an official perimeter (MTBS once published, otherwise the NIFC/WFIGS interagency final perimeter or a BAER/RAVG perimeter), saved to a file. When there is none, set *Burned area* to *Drafted from dNBR inside the given polygons* and give a generous outline around the whole fire: the outline still sets the imagery window and the offset ring, and *Draft burned-area perimeter* (dNBR at least 0.05 above the offset, patches ≥ 20 ha and at least 25 % of the largest, holes ≤ 2 ha filled, clipped to the outline) becomes the burned area, saved as `perimeter_draft.gpkg`. The report gives its size and its share of the outline. Both limits matter when the outline is generous: a pair two years apart, or a dry year, can lift the dNBR of unburned land to 0.1 (the 416 Fire, 2018: offset 0.105), and an outline far larger than the fire also holds other burns and change. With a raw 0.05 the 416 draft covered 389,000 ac (MTBS: 55,170 ac; IoU 0.09); with both limits, 66,600 ac (IoU 0.76). On the validation fires with each MTBS perimeter buffered by 5 km as the outline, keeping all patches gives a mean IoU of 0.74 and keeping patches of 25 % of the largest 0.78. The draft is still a starting point: edit it against `reflectance_post.tif` and rerun with it as given, with the granule ids from the report, for a final assessment.
 
@@ -108,6 +123,28 @@ With the granule ids given it takes under a minute for the Dragon Bravo test are
 | Title | Default *Burn severity*. |
 | Extra note (optional) | Free text added below the provenance note, such as the analyst or a caveat. |
 | Map (PDF), Map (PNG) | The PDF is required; the PNG is optional. |
+
+### MTBS fires
+
+[MTBS](https://www.mtbs.gov/) (Monitoring Trends in Burn Severity) maps every large US fire since 1984 and publishes each fire's record: name, ignition date, assessment type, the pre- and post-fire scenes, dNBR offset and thresholds. The plugin fetches it for you:
+
+- **Fire records.** The USGS MTBS fire records file (about 3.5 MB) is downloaded the first time it is needed and cached in your QGIS profile (`wildfire_analysis_toolkit/mtbs`). The plugin asks USGS at most once a day whether a newer copy exists (USGS updates it often; a fire appears there long before the map service has its perimeter) and downloads it only when it changed. Without a network, the cached copy is used with a warning.
+- **Perimeters** come from the USFS MTBS map service when it has the fire. For fires it doesn't have yet, the perimeter is only in the full USGS perimeter file, a 420 MB download (677 MB on disk). The plugin fetches it only when you tick *Allow the one-time 420 MB MTBS perimeter download*, then caches and refreshes it like the records.
+- **Published classes** for the comparison come from the MTBS image service, which holds them by year (through 2024 as of November 2026).
+
+**Find MTBS fires** (`fireanalysis:findmtbsfires`, under **Wildfire Analysis Toolkit › Fire records**) lists fires with their whole record, as perimeters or as points (burned-area centres; fast, no perimeter download).
+
+| Parameter | Description |
+|---|---|
+| Fire name or MTBS fire id | Whole words, any case, optionally with the year: `Dragon Bravo 2025`, `tunnel 2022`, or an id such as `AZ3530411158920220417`. Exact names come first, then the largest fires. |
+| Ignition year from, to | Optional. |
+| Area | Optional polygons: fires whose burned area is centred inside them. |
+| Wildfires only | Default on (MTBS also maps prescribed fires). |
+| Output | *Burned area perimeters* (default; needs a name, years or an area) or *Points*. |
+| Allow the one-time 420 MB MTBS perimeter download | For fires the map service lacks; off by default. Without it, those fires are left out with a warning. |
+| Most fires to return (Advanced) | Default 1,000. |
+
+The output keeps MTBS's field names (`event_id`, `incid_name`, `ig_date`, `asmnt_type`, `pre_id`, `post_id`, `dnbr_offst`, `low_t`, `mod_t`, `high_t` in x1000 units with 9999 for a class not mapped, `irwinid`, …), plus `year` and `perimeter` (where the polygon came from). Select one fire and give it to the pipeline with *Selected features only*: it is recognized as an MTBS fire. The MTBS perimeter shapefile you download from mtbs.gov works the same way.
 
 ### Imagery
 
@@ -223,8 +260,9 @@ Output: one multipolygon with `area_ha` and the `threshold` used, in the dNBR's 
 | Burned-area polygons | The area to classify. |
 | Assessment | Initial or extended. |
 | Low, Moderate, High threshold | Raw dNBR. Empty means estimate; 9.999 switches a class off. |
-| Estimate empty thresholds from | The median thresholds of MTBS wildfires within 150 km over the past 10 years (default; online; same assessment type when there are 5 or more), each taken relative to that fire's MTBS dNBR offset and moved to this pair's offset (from the dNBR's metadata; without one, the plain medians), or this fire's own data: low = offset + 2 robust standard deviations of the offset sample, high = the dNBR value that best matches RdNBR ≥ 750 (initial) or 640 (extended) where the pre-fire NBR is at least 0.5, moderate midway. With too few nearby fires, or when the MTBS service can't be reached, it falls back to this fire's data and says so. |
+| Estimate empty thresholds from | *This fire's own MTBS thresholds* (default): when MTBS has mapped the fire (the burned-area layer is an MTBS perimeter, or it is named in *MTBS fire*), MTBS's thresholds, each taken relative to MTBS's offset and moved to this pair's; otherwise as nearby fires. *Nearby MTBS fires*: the median thresholds of MTBS wildfires centred within 150 km over the past 10 years (from the cached MTBS fire records; same assessment type when there are 5 or more), each taken relative to that fire's MTBS dNBR offset and moved to this pair's offset (from the dNBR's metadata; without one, the plain medians), or this fire's own data: low = offset + 2 robust standard deviations of the offset sample, high = the dNBR value that best matches RdNBR ≥ 750 (initial) or 640 (extended) where the pre-fire NBR is at least 0.5, moderate midway. With too few nearby fires, or when the MTBS service can't be reached, it falls back to this fire's data and says so. |
 | Nearby MTBS fires: radius (km), years back (Advanced) | Default 150 km and 10 years. |
+| MTBS fire (Advanced) | An MTBS fire id or name and year, for *This fire's own MTBS thresholds* when the burned-area layer doesn't carry the record. |
 | dNBR offset, Offset robust standard deviation (Advanced) | Used by the own-data estimate. Empty means read from the dNBR's metadata (written by *Build dNBR*); an offset of 0 when there is none. |
 | Increased-greenness threshold (Advanced) | Default −0.150. Pixels at or below it are class 5. |
 
@@ -441,6 +479,9 @@ Plotting percent puts zones of different sizes on the same scale. Use the `ac_` 
 | "The perimeter layer holds several fires" | A whole WFIGS layer was given. Select the fire and tick *Selected features only*, or export it. |
 | "Set the fire start and end date" | The perimeter has no WFIGS record. Enter the dates. |
 | "The fire end date is an estimate" | The WFIGS record has no containment, control or fire-out date. Enter the end date if you know it. |
+| "No MTBS fire matches" / "… MTBS fires match" | Give the MTBS fire id, or the name as MTBS spells it with the year. *Find MTBS fires* lists the candidates. |
+| "… is not in the MTBS map service yet" | A recent fire: tick *Allow the one-time 420 MB MTBS perimeter download*, or give the burned-area polygons. |
+| "Could not check for a newer MTBS fire records file" | No network: the cached records are used. |
 | "HLS starts in 2013" | Choose Landsat 4–9 (Planetary Computer) for older fires. |
 | The tool still shows old behavior after an update | Reinstall the plugin, or add the script again, then refresh the Toolbox or restart QGIS. |
 
@@ -453,6 +494,7 @@ Plotting percent puts zones of different sizes on the same scale. Use the `ac_` 
 - **Drafted perimeters** (pipeline). A dNBR draft matches MTBS perimeters at a mean IoU of about 0.7: it misses faint low-severity edges and can take in unrelated change such as harvests or other fires. Edit it before reporting areas.
 - **Masked burn scars** (pipeline). Fmask, QA_PIXEL and SCL sometimes flag fresh burn scars as cloud shadow or water; the log reports each class's share. Masked pixels are class 6, non-mapping.
 - **Older imagery** (pipeline). Landsat 5 and 7 pairs agree less with MTBS (mean kappa 0.69 on six fires from 2000 to 2012), and Landsat 7 scenes after May 2003 have scan-line gaps.
+- **MTBS data** (pipeline). MTBS publishes a fire a year or more after it burns, and its map service and image service lag behind the records file. The 420 MB perimeter file is the only source of perimeters for the newest fires. Comparisons need MTBS's published classes, which lag further.
 - **Pixel-center rule.** Zonal Histogram counts a pixel in a zone only if its center is inside, so small or narrow zones are approximated.
 
 ## Development
@@ -465,11 +507,12 @@ Plotting percent puts zones of different sizes on the same scale. Use the `ac_` 
 | `docs/DESIGN.md` | The pipeline plan, decisions and verified service details. |
 | `dev/build_plugin.py` | Builds `dist/wildfire_analysis_toolkit-<version>.zip`. |
 | `dev/smoke_test.py` | Runs every mode on `testdata/` and checks the counts, inside QGIS (Python Console) or headless. |
-| `dev/pipeline_test.py` | Tests the offline algorithms on `testdata/` and synthetic scenes: Build dNBR, Classify severity, Prepare local scene NBR, Draft burned-area perimeter, Severity map, the pipeline report's inputs, and refusing scenes layers as an area of interest. |
+| `dev/pipeline_test.py` | Tests the offline algorithms on `testdata/` and synthetic scenes: Build dNBR, Classify severity, Prepare local scene NBR, Draft burned-area perimeter, Severity map, the pipeline report's inputs, refusing scenes layers as an area of interest, and the MTBS record code (scene ids, lookup, matching, thresholds, comparison) on synthetic records. |
 | `dev/mtbs_validation.py` | Reruns published MTBS fires with MTBS's dates, perimeters and thresholds and compares the classes pixel by pixel (online, about an hour; `--pc` for the pre-2013 Landsat fires). |
 | `dev/threshold_study.py` | Scores the threshold estimates against MTBS's choices (offline, on the validation outputs). |
 | `dev/perimeter_study.py` | Scores the perimeter draft against MTBS perimeters (offline, on the validation outputs). |
 | `dev/online_test.py` | Runs the whole chain against the live HLS archive and Planetary Computer, from search to summary table, and the one-step pipeline (given pair, suggested pair, drafted burned area, Planetary Computer). Needs a network and the Earthdata login; a few minutes. |
+| `dev/mtbs_test.py` | Online test of the MTBS fire records: the cache, lookup, nearby fires, *Find MTBS fires*, matching by IRWIN id and location, and the pipeline from an MTBS fire id (Tunnel 2022) with the comparison. `--download` adds the 420 MB perimeter file and Dragon Bravo 2025. A minute or two; with `--download`, longer. |
 | `dev/run_headless.sh` | Runs a dev script with a QGIS app's bundled Python, for example `dev/run_headless.sh /Applications/QGIS.app` (smoke test) or `dev/run_headless.sh /Applications/QGIS.app online_test.py`. |
 | `dev/make_testdata.py` | Rebuilds `testdata/` from the full Lab 6 data. |
 

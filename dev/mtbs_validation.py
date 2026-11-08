@@ -53,6 +53,7 @@ import numpy as np  # noqa: E402
 from osgeo import gdal  # noqa: E402
 
 from fireanalysis import VERSION, raster  # noqa: E402
+from fireanalysis import mtbs as mtbs_service  # noqa: E402
 from fireanalysis.algorithms.build_dnbr import BuildDnbr  # noqa: E402
 from fireanalysis.algorithms.classify_severity import ClassifySeverity  # noqa: E402
 from fireanalysis.algorithms.fetch_hls_nbr import FetchHlsNbr  # noqa: E402
@@ -115,27 +116,18 @@ def http(url, **params):
 
 
 def pc_scene(mtbs_id):
-    """MTBS scene id -> (Planetary Computer source, platform, QDate). '503403520110624' is
-    Landsat 5 path 34 row 35; 'A12SVE20220601_30m' is Sentinel-2A."""
-    s = mtbs_id.split("_")[0]
-    d = s[-8:]
-    day = QDate(int(d[:4]), int(d[4:6]), int(d[6:]))
-    if s[0] in "AB":
-        return 1, f"sentinel-2{s[0].lower()}", day
-    return 0, f"landsat-{s[0]}", day
+    """MTBS scene id -> (Planetary Computer source, platform, QDate), through mtbs.parse_scene
+    (Landsat 4-9, Sentinel-2A/B/C)."""
+    sc = mtbs_service.parse_scene(mtbs_id)
+    return (1 if sc["planetary"] == "s2" else 0), sc["platform"], QDate(sc["date"])
 
 
 def scene(mtbs_id):
-    """MTBS scene id -> (HLS sensor, QDate). '803303520210612' is Landsat 8 path 33
-    row 35; 'A12SVE20220601_30m' is Sentinel-2A tile 12SVE."""
-    s = mtbs_id.split("_")[0]
-    if s[0] in "89" and s[:-8].isdigit():
-        d = s[-8:]
-        return "L30", QDate(int(d[:4]), int(d[4:6]), int(d[6:]))
-    if s[0] in "AB":
-        d = s[-8:]
-        return "S30", QDate(int(d[:4]), int(d[4:6]), int(d[6:]))
-    raise ValueError(f"Unknown MTBS scene id {mtbs_id}")
+    """MTBS scene id -> (HLS sensor, QDate)."""
+    sc = mtbs_service.parse_scene(mtbs_id)
+    if not sc["hls"]:
+        raise ValueError(f"MTBS scene {mtbs_id} ({sc['platform']}) is not in HLS")
+    return sc["hls"], QDate(sc["date"])
 
 
 def run(alg, params):

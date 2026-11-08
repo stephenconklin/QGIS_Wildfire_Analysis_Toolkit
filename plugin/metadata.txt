@@ -17,6 +17,8 @@ about=Processing tools for wildfire burn severity, modeled on the MTBS QGIS Fire
     
     Severity: Build dNBR (dNBR, RdNBR, RBR and the offset), Draft burned-area perimeter, Classify severity (MTBS classes, with thresholds given or estimated from nearby MTBS fires), and Burn severity summary (percent, hectares and acres per class for a fire and its sub-areas).
     
+    MTBS fires: give an MTBS fire's id or name and year, and the plugin fetches its perimeter and MTBS record (ignition date, MTBS's own image pair, thresholds) itself, then compares the result with MTBS's published classes. Find MTBS fires looks up any of the 31,000+ fires MTBS has mapped since 1984. No manual download: the USGS MTBS records are fetched and cached automatically.
+    
     Validated against published MTBS fires: with MTBS's thresholds, the classes agree at a mean kappa of 0.78. Uses only QGIS, GDAL and NumPy, which ship with QGIS.
     
     The README in the code repository has every parameter, the method, troubleshooting and the validation results.
@@ -26,7 +28,8 @@ repository=https://github.com/stephenconklin/QGIS_Wildfire_Analysis_Toolkit
 homepage=https://conklingeospatial.com/projects/qgis-wildfire-analysis-toolkit/
 
 hasProcessingProvider=yes
-changelog=2.0.0 The plugin becomes the Wildfire Analysis Toolkit, a burn severity pipeline modeled on the MTBS Fire Mapping Tool: imagery from NASA HLS, Planetary Computer Landsat and Sentinel-2 or downloaded scenes; dNBR, RdNBR and RBR with the unburned offset; drafted perimeters; MTBS classes with given or estimated thresholds; a whole-pipeline tool with an HTML report and styled layers; and a PDF severity map. Burn severity summary keeps its id and parameters and moves to the Severity group. Needs QGIS 3.44 or later. The full history is in CHANGELOG.md in the repository.
+changelog=2.1.0 MTBS fire records without a manual download: the plugin fetches and caches the USGS MTBS records itself. New Find MTBS fires tool. The pipeline runs from an MTBS fire's id or name alone (its perimeter, MTBS's own image pair and thresholds) and compares the result with MTBS's published classes. Sentinel-2C scenes.
+    2.0.0 The plugin becomes the Wildfire Analysis Toolkit, a burn severity pipeline modeled on the MTBS Fire Mapping Tool: imagery from NASA HLS, Planetary Computer Landsat and Sentinel-2 or downloaded scenes; dNBR, RdNBR and RBR with the unburned offset; drafted perimeters; MTBS classes with given or estimated thresholds; a whole-pipeline tool with an HTML report and styled layers; and a PDF severity map. Burn severity summary keeps its id and parameters and moves to the Severity group. Needs QGIS 3.44 or later. The full history is in CHANGELOG.md in the repository.
     1.1.0 RdNBR and RBR; any number of sub-areas; refuses rescaled dNBR input; fixes for the severity raster type and CRS.
 tags=wildfire,fire,burn severity,mtbs,dnbr,rdnbr,rbr,nbr,hls,landsat,sentinel-2,planetary computer,earthdata,stac,remote sensing,zonal statistics,processing
 category=Analysis
