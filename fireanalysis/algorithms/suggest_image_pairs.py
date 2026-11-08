@@ -26,11 +26,8 @@ ASSESSMENTS = ['Initial (soon after the fire)', 'Extended (next growing season)'
 
 
 def _no_geometry():
-    from qgis.core import Qgis, QgsWkbTypes
-    try:
-        return Qgis.WkbType.NoGeometry
-    except AttributeError:
-        return QgsWkbTypes.NoGeometry
+    from qgis.core import Qgis
+    return Qgis.WkbType.NoGeometry
 
 
 def years_back(d, n):
@@ -286,7 +283,7 @@ class SuggestImagePairs(QgsProcessingAlgorithm):
             feat = QgsFeature(fields)
             feat.setAttributes([rank, source, qd.isoformat(), qs, round(qc, 1), pd.isoformat(), ps, round(pc, 1),
                                 gap, yrs, ' '.join(qg), ' '.join(pg)])
-            sink.addFeature(feat, QgsFeatureSink.FastInsert)
+            sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
             feedback.pushInfo(f'{rank}. pre {qd} {qs} ({qc:.0f} % clear) / post {pd} {ps} ({pc:.0f} % clear), '
                               f'{gap} days apart in the season, {yrs} year(s)')
         if not pairs:

@@ -11,11 +11,8 @@ from .build_dnbr import source_union
 
 
 def _polygon_wkb():
-    from qgis.core import Qgis, QgsWkbTypes
-    try:
-        return Qgis.WkbType.MultiPolygon
-    except AttributeError:
-        return QgsWkbTypes.MultiPolygon
+    from qgis.core import Qgis
+    return Qgis.WkbType.MultiPolygon
 
 
 def burned_mask(dnbr, threshold, min_pixels, hole_pixels):
@@ -182,7 +179,7 @@ class DraftPerimeter(QgsProcessingAlgorithm):
             merged.convertToMultiType()
             feat.setGeometry(merged)
             feat.setAttributes([round(merged.area() / 10000.0, 2), t])
-            sink.addFeature(feat, QgsFeatureSink.FastInsert)
+            sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
             feedback.pushInfo(f'Burned area: {merged.area() / 10000.0:,.0f} ha ({merged.area() / 4046.86:,.0f} ac) '
                               f'at dNBR >= {t}.')
         return {self.OUTPUT: dest_id}

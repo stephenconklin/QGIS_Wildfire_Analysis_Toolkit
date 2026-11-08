@@ -7,19 +7,16 @@ QGIS calls on the main thread once every result layer is in the layer tree.
 from qgis.core import (Qgis, QgsColorRampShader, QgsContrastEnhancement, QgsExpression, QgsFillSymbol,
                        QgsMultiBandColorRenderer, QgsPalettedRasterRenderer, QgsProcessingContext,
                        QgsProcessingLayerPostProcessorInterface, QgsProcessingUtils, QgsProject,
-                       QgsRasterMinMaxOrigin, QgsRasterShader,
+                       QgsRasterShader,
                        QgsRuleBasedRenderer, QgsSingleBandGrayRenderer, QgsSingleBandPseudoColorRenderer)
 from qgis.PyQt.QtGui import QColor
-
-from .compat import _try
 
 # Severity ramp for continuous indices, unburned green to high red, at fractions of the range
 RAMP = ((0.0, '#1a9641'), (0.27, '#a6d96a'), (0.4, '#ffffbf'), (0.63, '#fdae61'), (1.0, '#d7191c'))
 
 
 def _stretch():
-    return _try(lambda: QgsContrastEnhancement.ContrastEnhancementAlgorithm.StretchToMinimumMaximum,
-                lambda: QgsContrastEnhancement.StretchToMinimumMaximum)
+    return QgsContrastEnhancement.ContrastEnhancementAlgorithm.StretchToMinimumMaximum
 
 
 def mtbs_classes(layer):
@@ -34,8 +31,7 @@ def index_ramp(lo, hi):
     """A style function: band 1 on the severity ramp from lo to hi."""
     def style(layer):
         ramp = QgsColorRampShader(lo, hi)
-        ramp.setColorRampType(_try(lambda: Qgis.ShaderInterpolationMethod.Linear,
-                                   lambda: QgsColorRampShader.Interpolated))
+        ramp.setColorRampType(Qgis.ShaderInterpolationMethod.Linear)
         ramp.setColorRampItemList([QgsColorRampShader.ColorRampItem(lo + f * (hi - lo), QColor(c),
                                                                     f'{lo + f * (hi - lo):.2f}') for f, c in RAMP])
         shader = QgsRasterShader()
@@ -63,8 +59,7 @@ def gray(lo, hi):
 def false_color(layer):
     """Bands 1-3 (SWIR2, NIR, red) as RGB, cumulative cut stretch (2-98 % by default)."""
     layer.setRenderer(QgsMultiBandColorRenderer(layer.dataProvider(), 1, 2, 3))
-    layer.setContrastEnhancement(_stretch(), _try(lambda: Qgis.RasterRangeLimit.CumulativeCut,
-                                                  lambda: QgsRasterMinMaxOrigin.CumulativeCut))
+    layer.setContrastEnhancement(_stretch(), Qgis.RasterRangeLimit.CumulativeCut)
 
 
 def _outline(color, width, dashed=False):

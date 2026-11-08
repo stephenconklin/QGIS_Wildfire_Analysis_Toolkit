@@ -155,7 +155,7 @@ class FindPlanetaryScenes(QgsProcessingAlgorithm):
             feat.setAttributes([iid, planetary.SOURCES[source][0], platform, label, date, doy,
                                 None if cloud is None else round(cloud, 1), round(pct, 2),
                                 None if c is None else round(c, 1), None if d is None else round(d, 1)])
-            sink.addFeature(feat, QgsFeatureSink.FastInsert)
+            sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
         feedback.pushInfo(f'{len(rows)} scenes on {len({r[0] for r in rows})} dates.')
         return {self.OUTPUT: dest_id}
 

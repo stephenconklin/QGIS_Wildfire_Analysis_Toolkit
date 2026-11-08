@@ -10,22 +10,22 @@ from qgis.core import (Qgis, QgsFeatureRequest, QgsFillSymbol, QgsLayoutExporter
                        QgsProcessingAlgorithm, QgsProcessingException, QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterFileDestination, QgsProcessingParameterRasterLayer,
                        QgsProcessingParameterString, QgsProcessingParameterVectorLayer, QgsProject, QgsRasterLayer,
-                       QgsRectangle, QgsUnitTypes)
+                       QgsRectangle)
 from qgis.PyQt.QtGui import QColor, QFont
 
 from .. import VERSION
-from ..compat import _try, polygon_source
+from ..compat import polygon_source
 from .classify_severity import CLASS_COLORS, CLASS_NAMES, NON_MAPPING
 
 PAGE_W, PAGE_H = 297.0, 210.0  # A4 landscape, mm
 
 
 def _mm():
-    return _try(lambda: Qgis.LayoutUnit.Millimeters, lambda: QgsUnitTypes.LayoutMillimeters)
+    return Qgis.LayoutUnit.Millimeters
 
 
 def _no_threading_flag():
-    return _try(lambda: Qgis.ProcessingAlgorithmFlag.NoThreading, lambda: QgsProcessingAlgorithm.FlagNoThreading)
+    return Qgis.ProcessingAlgorithmFlag.NoThreading
 
 
 def _class_renderer(layer):
@@ -39,7 +39,7 @@ def _label(layout, text, x, y, w, h, size=10, bold=False, html=False):
     item = QgsLayoutItemLabel(layout)
     item.setText(text)
     if html:
-        item.setMode(_try(lambda: QgsLayoutItemLabel.Mode.ModeHtml, lambda: QgsLayoutItemLabel.ModeHtml))
+        item.setMode(QgsLayoutItemLabel.Mode.ModeHtml)
     font = QFont('Arial', size)
     font.setBold(bold)
     try:
@@ -179,7 +179,7 @@ class SeverityMap(QgsProcessingAlgorithm):
         # The class colours need no "Severity" heading or "Band 1" line under the legend title
         from qgis.core import QgsLegendRenderer, QgsLegendStyle, QgsMapLayerLegendUtils
         node = root.findLayer(raster.id())
-        QgsLegendRenderer.setNodeLegendStyle(node, QgsLegendStyle.Hidden)
+        QgsLegendRenderer.setNodeLegendStyle(node, QgsLegendStyle.Style.Hidden)
         nodes = legend.model().layerLegendNodes(node)
         keep = [i for i, n in enumerate(nodes) if not str(n.data(0) or '').startswith('Band ')]
         QgsMapLayerLegendUtils.setLegendNodeOrder(node, keep)
@@ -192,15 +192,14 @@ class SeverityMap(QgsProcessingAlgorithm):
         bar.setStyle('Single Box')
         bar.setLinkedMap(m)
         bar.applyDefaultSize()
-        bar.setUnits(_try(lambda: Qgis.DistanceUnit.Kilometers, lambda: QgsUnitTypes.DistanceKilometers))
+        bar.setUnits(Qgis.DistanceUnit.Kilometers)
         bar.setUnitLabel('km')
         bar.setNumberOfSegments(4)
         # Four segments of a round length that fit the 90 mm column (about 20 mm each)
         km_per_mm = m.extent().width() / 1000.0 / 185.0
         nice = [0.1, 0.2, 0.25, 0.5, 1, 2, 2.5, 5, 10, 20, 25, 50, 100]
         bar.setUnitsPerSegment(max([n for n in nice if n <= 20 * km_per_mm] or [nice[0]]))
-        bar.setSegmentSizeMode(_try(lambda: Qgis.ScaleBarSegmentSizeMode.Fixed,
-                                    lambda: QgsLayoutItemScaleBar.SegmentSizeFixed))
+        bar.setSegmentSizeMode(Qgis.ScaleBarSegmentSizeMode.Fixed)
         layout.addLayoutItem(bar)
         bar.attemptMove(QgsLayoutPoint(200, 188, _mm()))  # right column, clear of the map
         arrow = QgsLayoutItemPicture(layout)
@@ -264,14 +263,14 @@ class SeverityMap(QgsProcessingAlgorithm):
         settings = QgsLayoutExporter.PdfExportSettings()
         settings.dpi = 200
         result = exporter.exportToPdf(pdf, settings)
-        if result != QgsLayoutExporter.Success:
+        if result != QgsLayoutExporter.ExportResult.Success:
             raise QgsProcessingException(f'PDF export failed ({result}).')
         results = {self.PDF: pdf}
         if parameters.get(self.PNG) not in (None, ''):
             png = self.parameterAsFileOutput(parameters, self.PNG, context)
             img = QgsLayoutExporter.ImageExportSettings()
             img.dpi = 150
-            if exporter.exportToImage(png, img) == QgsLayoutExporter.Success:
+            if exporter.exportToImage(png, img) == QgsLayoutExporter.ExportResult.Success:
                 results[self.PNG] = png
         feedback.pushInfo(f'Map: {pdf}')
         return results

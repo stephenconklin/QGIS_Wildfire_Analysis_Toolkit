@@ -1,20 +1,36 @@
 ; dev/build_plugin.py fills in version from VERSION in fireanalysis/__init__.py.
+; changelog is kept by hand, one short line per version (the full history is CHANGELOG.md); no percent signs.
 [general]
 name=Wildfire Analysis Toolkit
-qgisMinimumVersion=3.40
+qgisMinimumVersion=3.44
 qgisMaximumVersion=4.99
-supportsQt6=True
 description=Wildfire burn severity from satellite imagery to MTBS-style classes, area summaries, maps and reports: NASA HLS, Landsat and Sentinel-2, calibrated, with dNBR, RdNBR and RBR.
-about=Wildfire Analysis Toolkit: QGIS Processing tools for wildfire burn severity, modeled on the MTBS QGIS Fire Mapping Tool. Pipeline: Burn severity (whole pipeline) goes from a fire's perimeter and dates to an image pair, NBR, dNBR with the unburned offset, MTBS classes, area summaries and an HTML report; Severity map (PDF) makes the map. Imagery: NASA HLS v2.0 (needs a free Earthdata login in ~/.netrc), Landsat 4-9 Collection 2 and Sentinel-2 L2A from Microsoft Planetary Computer (no account), or downloaded scenes, calibrated from their metadata and cloud-masked, reading only the area of interest. Severity: Build dNBR (dNBR, RdNBR, RBR, offset), Draft burned-area perimeter, Classify severity (MTBS classes, thresholds given or estimated from nearby MTBS fires), and Burn severity summary (percent, hectares and acres per class for a fire and its sub-areas). Validated against 23 published MTBS fires. Uses only PyQGIS, GDAL and numpy.
 version=0.0.0
 author=Stephen Conklin
 email=stephenconklin@gmail.com
-homepage=https://github.com/stephenconklin/QGIS_Burn_Severity
-repository=https://github.com/stephenconklin/QGIS_Burn_Severity
-tracker=https://github.com/stephenconklin/QGIS_Burn_Severity/issues
-tags=burn severity,mtbs,hls,landsat,sentinel-2,planetary computer,earthdata,stac,dnbr,rdnbr,rbr,nbr,wildfire,fire,landsat,sentinel-2,zonal statistics,processing
+
+about=Processing tools for wildfire burn severity, modeled on the MTBS QGIS Fire Mapping Tool. They appear in the Processing Toolbox under Wildfire Analysis Toolkit.
+    
+    Burn severity (whole pipeline) goes from a fire's perimeter and dates to an image pair, pre- and post-fire NBR, dNBR with the unburned offset, MTBS severity classes, area summaries per sub-area and an HTML report. The fire name and dates can be read from a WFIGS perimeter record. Severity map (PDF) makes a print-ready map.
+    
+    Imagery: NASA HLS v2.0 (needs a free NASA Earthdata login in a .netrc file), Landsat 4-9 Collection 2 and Sentinel-2 L2A from Microsoft Planetary Computer (no account), or scenes you downloaded. Images are calibrated from their metadata, cloud-masked, and read only for the area of interest.
+    
+    Severity: Build dNBR (dNBR, RdNBR, RBR and the offset), Draft burned-area perimeter, Classify severity (MTBS classes, with thresholds given or estimated from nearby MTBS fires), and Burn severity summary (percent, hectares and acres per class for a fire and its sub-areas).
+    
+    Validated against published MTBS fires: with MTBS's thresholds, the classes agree at a mean kappa of 0.78. Uses only QGIS, GDAL and NumPy, which ship with QGIS.
+    
+    The README in the code repository has every parameter, the method, troubleshooting and the validation results.
+
+tracker=https://github.com/stephenconklin/QGIS_Wildfire_Analysis_Toolkit/issues
+repository=https://github.com/stephenconklin/QGIS_Wildfire_Analysis_Toolkit
+homepage=https://conklingeospatial.com/projects/qgis-wildfire-analysis-toolkit/
+
+hasProcessingProvider=yes
+changelog=2.0.0 The plugin becomes the Wildfire Analysis Toolkit, a burn severity pipeline modeled on the MTBS Fire Mapping Tool: imagery from NASA HLS, Planetary Computer Landsat and Sentinel-2 or downloaded scenes; dNBR, RdNBR and RBR with the unburned offset; drafted perimeters; MTBS classes with given or estimated thresholds; a whole-pipeline tool with an HTML report and styled layers; and a PDF severity map. Burn severity summary keeps its id and parameters and moves to the Severity group. Needs QGIS 3.44 or later. The full history is in CHANGELOG.md in the repository.
+    1.1.0 RdNBR and RBR; any number of sub-areas; refuses rescaled dNBR input; fixes for the severity raster type and CRS.
+tags=wildfire,fire,burn severity,mtbs,dnbr,rdnbr,rbr,nbr,hls,landsat,sentinel-2,planetary computer,earthdata,stac,remote sensing,zonal statistics,processing
 category=Analysis
 icon=icon.svg
-hasProcessingProvider=yes
 experimental=False
 deprecated=False
+server=False

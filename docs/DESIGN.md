@@ -1,6 +1,6 @@
 # Design: from severity summary to fire analysis pipeline
 
-Status: agreed 2026-10-06. Phases 1–6 built (2.0.0-dev, unreleased) and tested on QGIS 3.44 and 4.2.3, headless and in the desktop session; validated against 23 MTBS fires (below). Open: Earth Search provider (not needed so far), credentials from the QGIS authentication manager instead of ~/.netrc.
+Status: agreed 2026-10-06. Phases 1–6 built (released in 2.0.0, 2026-11-08) and tested on QGIS 3.44 and 4.2.3, headless and in the desktop session; validated against 23 MTBS fires (below). Open: Earth Search provider (not needed so far), credentials from the QGIS authentication manager instead of ~/.netrc.
 
 ## Goal
 
@@ -9,7 +9,7 @@ pre- and post-fire imagery, calibrates and masks it correctly, and produces
 burn severity products comparable to MTBS: NBR, dNBR, RdNBR/RBR, a perimeter,
 `dnbr6`-style classes, area summaries, styled layers, a map and a metadata
 record. The model is the MTBS QGIS Fire Mapping Tool (FMT3 v2.1.0), redone as
-Processing algorithms that run on QGIS 3.40 to 4.x, headless or in models.
+Processing algorithms that run on QGIS 3.44 to 4.x, headless or in models.
 
 ## What FMT3 does, and what we change
 
@@ -23,7 +23,7 @@ text file.
 
 | FMT3 | This plugin |
 |---|---|
-| PyQt5 GUI, QGIS 3 only, Windows paths and hand-renamed config files | Processing algorithms, QGIS 3.40–4.x, batch, models, `processing.run`, headless tests |
+| PyQt5 GUI, QGIS 3 only, Windows paths and hand-renamed config files | Processing algorithms, QGIS 3.44–4.x, batch, models, `processing.run`, headless tests |
 | User searches GloVis / EarthExplorer and downloads whole scenes | STAC search on the AOI; reads only the AOI window from cloud-optimized GeoTIFFs |
 | Landsat C2 L2 bands appear to be stacked as raw DN, without the 0.0000275 / −0.2 scaling (to be confirmed on a real scene) | Every source is scaled to reflectance from its own metadata before any index |
 | Cloud, shadow and water mask digitized by hand | Mask from Fmask / QA_PIXEL / SCL, editable afterwards |
@@ -112,7 +112,7 @@ fetching always mosaics.
 | 5 | Threshold estimates and `dnbr6` | `fireanalysis:classifyseverity` | done (2.0.0-dev) |
 | 5 | Perimeter draft | `fireanalysis:draftperimeter` | done (2.0.0-dev) |
 | 6 | Whole pipeline in one step, with report (HLS or Planetary Computer) | `fireanalysis:burnseveritypipeline` | done (2.0.0-dev) |
-| 5 | Burn severity summary | `fireanalysis:burnseveritysummary` | done (1.1.0) |
+| 5 | Burn severity summary | `fireanalysis:burnseveritysummary` | done (1.1.0; 1.2.0 scoped enums) |
 | 6 | Layout PDF (map, legend, summary, provenance) | `fireanalysis:severitymap` | done (2.0.0-dev) |
 
 **Find HLS scenes.** Inputs: AOI polygons, start and end dates, sensors
@@ -238,3 +238,16 @@ perimeter): dNBR >= 0.05, patches >= 20 ha: 0.69 unseeded, 0.73 seeded with a
 1 km circle at the MTBS location (min 0.005: the seed misses for Pass and
 Mitchell). Thresholds 0.075–0.15 do worse; patch size matters little.
 
+
+**Offset-aware thresholds and drafts** (2.0.0-dev.3). The 416 Fire (2018) from an
+HLS S30 pair two years apart (2016-09-27 / 2018-09-27) has a dNBR offset of
+0.105; MTBS's extended assessment used a 2017/2019 Landsat pair with offset
+-0.023 (55,178 ac). Thresholds and the draft threshold apply to uncorrected
+dNBR, so they must move with the pair's offset. `mtbs.median_thresholds(offset=...)`
+uses median(t_i - dnbr_offst_i) + offset: mean kappa 0.58 to 0.61 on 21 of the
+recent and historical fires (Divide worse; Pass and Cerro Pelado much better).
+The draft keeps dNBR >= offset + 0.05: mean IoU 0.73 to 0.78 (patches touching
+the MTBS perimeter). Inside a generous outline (MTBS perimeter + 5 km), keeping
+patches of at least 25 % (or 10 %) of the largest gives IoU 0.78, against 0.74
+for all patches; the largest patch alone fails on Las Conchas (0.02). The
+validation folders were temporary (`$TMPDIR/fireanalysis_mtbs_*`).

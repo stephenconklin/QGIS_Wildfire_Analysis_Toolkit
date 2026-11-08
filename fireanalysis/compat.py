@@ -1,72 +1,53 @@
-"""QGIS 3.x / 4.x compatibility. Prefer the newer enum names (QGIS >= 3.30/3.36/3.38)
-and fall back to the old ones. burn_severity_summary.py keeps its own copy so
-it can still be installed as a single script."""
-from qgis.core import (Qgis, QgsField, QgsProcessing, QgsProcessingParameterDateTime,
-                       QgsProcessingParameterDefinition, QgsProcessingParameterNumber,
-                       QgsUnitTypes, QgsWkbTypes)
+"""QGIS 3.44+ / 4.x helpers. Enums are written only in their scoped form: QGIS 4
+(Qt6) accepts nothing else, and the plugins.qgis.org Qt6 check flags every flat
+name, even as a fallback. burn_severity_summary.py keeps its own copy so it can
+still be installed as a single script."""
+from qgis.core import Qgis, QgsField
+from qgis.PyQt.QtCore import QMetaType
 
-
-def _try(new, old):
-    try:
-        return new()
-    except AttributeError:
-        return old()
+_FIELD_TYPES = {'int': QMetaType.Type.Int, 'double': QMetaType.Type.Double, 'string': QMetaType.Type.QString}
 
 
 def field(name, kind, length=0):
-    """kind: 'int', 'double' or 'string'. QGIS >= 3.38 wants QMetaType, older QVariant."""
+    """kind: 'int', 'double' or 'string'."""
     if kind == 'string' and not length:
         length = 50
-    try:
-        from qgis.PyQt.QtCore import QMetaType
-        t = {'int': QMetaType.Type.Int, 'double': QMetaType.Type.Double,
-             'string': QMetaType.Type.QString}[kind]
-        return QgsField(name, t, len=length)
-    except (AttributeError, TypeError):
-        from qgis.PyQt.QtCore import QVariant
-        t = {'int': QVariant.Int, 'double': QVariant.Double, 'string': QVariant.String}[kind]
-        return QgsField(name, t, len=length)
+    return QgsField(name, _FIELD_TYPES[kind], len=length)
 
 
 def polygon_source():
-    return _try(lambda: Qgis.ProcessingSourceType.VectorPolygon,
-                lambda: QgsProcessing.TypeVectorPolygon)
+    return Qgis.ProcessingSourceType.VectorPolygon
 
 
 def polygon_wkb():
-    return _try(lambda: Qgis.WkbType.Polygon, lambda: QgsWkbTypes.Polygon)
+    return Qgis.WkbType.Polygon
 
 
 def polygon_geometry_type():
-    return _try(lambda: Qgis.GeometryType.Polygon, lambda: QgsWkbTypes.PolygonGeometry)
+    return Qgis.GeometryType.Polygon
 
 
 def meters():
-    return _try(lambda: Qgis.DistanceUnit.Meters, lambda: QgsUnitTypes.DistanceMeters)
+    return Qgis.DistanceUnit.Meters
 
 
 def date_type():
-    return _try(lambda: Qgis.ProcessingDateTimeParameterDataType.Date,
-                lambda: QgsProcessingParameterDateTime.Date)
+    return Qgis.ProcessingDateTimeParameterDataType.Date
 
 
 def integer_type():
-    return _try(lambda: Qgis.ProcessingNumberParameterType.Integer,
-                lambda: QgsProcessingParameterNumber.Integer)
+    return Qgis.ProcessingNumberParameterType.Integer
 
 
 def double_type():
-    return _try(lambda: Qgis.ProcessingNumberParameterType.Double,
-                lambda: QgsProcessingParameterNumber.Double)
+    return Qgis.ProcessingNumberParameterType.Double
 
 
 def advanced(param):
-    flag = _try(lambda: Qgis.ProcessingParameterFlag.Advanced,
-                lambda: QgsProcessingParameterDefinition.FlagAdvanced)
-    param.setFlags(param.flags() | flag)
+    param.setFlags(param.flags() | Qgis.ProcessingParameterFlag.Advanced)
     return param
 
 
 def warn(feedback, text):
-    """pushWarning (QGIS >= 3.16) shows in orange; fall back to plain info."""
-    getattr(feedback, 'pushWarning', feedback.pushInfo)(text)
+    """pushWarning shows in orange."""
+    feedback.pushWarning(text)

@@ -39,7 +39,7 @@ def _request_once(url, body, feedback):
         err = blocking.post(req, QByteArray(json.dumps(body).encode()), True, feedback)
     if feedback is not None and feedback.isCanceled():
         return None
-    if err != QgsBlockingNetworkRequest.NoError:
+    if err != QgsBlockingNetworkRequest.ErrorCode.NoError:
         raise StacError(f'Request to {url.split("?")[0]} failed: {blocking.errorMessage()}')
     content = bytes(blocking.reply().content())
     try:

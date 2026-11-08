@@ -3,7 +3,7 @@
 The Wildfire Analysis Toolkit is a set of QGIS Processing tools for wildfire burn severity, in two parts:
 
 - **Burn severity summary**, a single script (also in the plugin): classifies a dNBR raster (or RdNBR or RBR) and reports how much of a burned area, and of any sub-areas inside it, falls in each class, as percent, hectares and acres. One dialog replaces about a dozen manual steps (fix geometries, dissolve, intersect, tag, merge, reclassify, zonal histogram, field calculations and reshaping), and the last output is a one-row-per-class table ready for a QGIS layout bar chart.
-- **The fire analysis pipeline** (plugin, version 2.0 in development): from a fire's perimeter and dates to calibrated satellite imagery, dNBR, MTBS-style severity classes, area summaries, a map and a report, modeled on the MTBS [QGIS Fire Mapping Tool](https://www.mtbs.gov/qgis-fire-mapping-tool). Imagery comes from NASA HLS, Microsoft Planetary Computer (Landsat 1982 on, Sentinel-2) or your own downloads, and is calibrated from its metadata. Validated against 23 published MTBS fires. See [Fire analysis pipeline](#fire-analysis-pipeline-plugin-only-in-development).
+- **The fire analysis pipeline** (plugin, since version 2.0): from a fire's perimeter and dates to calibrated satellite imagery, dNBR, MTBS-style severity classes, area summaries, a map and a report, modeled on the MTBS [QGIS Fire Mapping Tool](https://www.mtbs.gov/qgis-fire-mapping-tool). Imagery comes from NASA HLS, Microsoft Planetary Computer (Landsat 1982 on, Sentinel-2) or your own downloads, and is calibrated from its metadata. Validated against 23 published MTBS fires. See [Fire analysis pipeline](#fire-analysis-pipeline-plugin-only).
 
 Both were built to compare the 2025 Dragon Bravo Fire on the North Rim of Grand Canyon National Park with the Bright Angel Creek watershed inside it, and work for any fire and any set of sub-areas.
 
@@ -17,7 +17,7 @@ Both were built to compare the 2025 Dragon Bravo Fire on the North Rim of Grand 
 
 ## Requirements
 
-- QGIS 3.40 or later, including QGIS 4. Tested on QGIS 3.44 and 4.2.
+- QGIS 3.44 or later, including QGIS 4. Tested on QGIS 3.44 and 4.2.
 - No extra plugins or Python packages. It uses only QGIS's built-in Processing tools, GDAL and numpy.
 - The pipeline's imagery algorithms need an internet connection, and the HLS ones a free NASA Earthdata login (see *Earthdata login*). Planetary Computer needs no account.
 
@@ -25,7 +25,7 @@ Both were built to compare the 2025 Dragon Bravo Fire on the North Rim of Grand 
 
 Choose one.
 
-**As a plugin** (everything). Build the zip with `python3 dev/build_plugin.py`, then in QGIS use *Plugins › Manage and Install Plugins › Install from ZIP* and pick `dist/wildfire_analysis_toolkit-<version>.zip`. The tools appear in the Processing Toolbox under **Wildfire Analysis Toolkit**, in the groups Pipeline, Imagery and Severity; the summary tool is **Wildfire Analysis Toolkit › Severity › Burn severity summary** (algorithm id `fireanalysis:burnseveritysummary`).
+**As a plugin** (everything). In QGIS, open *Plugins › Manage and Install Plugins*, search for **Wildfire Analysis Toolkit** and click *Install Plugin*. To install a development copy instead, build the zip with `python3 dev/build_plugin.py` and use *Install from ZIP* in the same dialog with `dist/wildfire_analysis_toolkit-<version>.zip`. The tools appear in the Processing Toolbox under **Wildfire Analysis Toolkit**, in the groups Pipeline, Imagery and Severity; the summary tool is **Wildfire Analysis Toolkit › Severity › Burn severity summary** (algorithm id `fireanalysis:burnseveritysummary`).
 
 **As a script** (the summary tool only). In the Processing Toolbox, click the Python icon and choose **Add Script to Toolbox…**, then pick `burn_severity_summary.py`. The tool appears under **Scripts › Fire Analysis › Burn severity summary** (algorithm id `script:burnseveritysummary`). QGIS copies the file into your profile's `processing/scripts` folder, so add it again after downloading a new version.
 
@@ -55,7 +55,7 @@ Leave everything else at the defaults and click **Run**. The Bright Angel row of
 
 It picks an image pair, fetches both dates, and writes dNBR, the MTBS classes, the summary and `report.html`, in under two minutes. Then run **Severity map (PDF)** on `dnbr6.tif` and `summary.gpkg` from that folder.
 
-## Fire analysis pipeline (plugin only, in development)
+## Fire analysis pipeline (plugin only)
 
 Version 2.0 grows the plugin into a fire analysis pipeline modeled on the MTBS [QGIS Fire Mapping Tool](https://www.mtbs.gov/qgis-fire-mapping-tool) (plan: [docs/DESIGN.md](docs/DESIGN.md)). Each step is a Processing algorithm, so the chain also runs in models, batch mode and `processing.run`:
 
@@ -282,7 +282,7 @@ The thresholds that best reproduce MTBS's classes on our dNBR are, on average, w
 | This fire's data: offset + 2 robust SD; RdNBR match in dense vegetation; midway | 0.49 |
 | Key & Benson (2006) generic 0.10 / 0.27 / 0.66 | 0.48 |
 
-Moving the nearby medians to this pair's offset (each fire's thresholds minus its MTBS offset, plus ours) raises the mean kappa from 0.58 to 0.61 on 21 of the recent and historical fires, most where our offset differs from MTBS's (Pass 0.41 → 0.75, Cerro Pelado 0.02 → 0.32); it is the *Classify severity* default since 2.0.0-dev.3. For the 416 Fire (2018, offset 0.105 on a pair two years apart) it gives 0.165 / 0.385 / 0.625, against 0.173 / 0.383 / 0.623 for MTBS's own thresholds moved to the same offset.
+Moving the nearby medians to this pair's offset (each fire's thresholds minus its MTBS offset, plus ours) raises the mean kappa from 0.58 to 0.61 on 21 of the recent and historical fires, most where our offset differs from MTBS's (Pass 0.41 → 0.75, Cerro Pelado 0.02 → 0.32); it is the *Classify severity* default. For the 416 Fire (2018, offset 0.105 on a pair two years apart) it gives 0.165 / 0.385 / 0.625, against 0.173 / 0.383 / 0.623 for MTBS's own thresholds moved to the same offset.
 
 So the imagery and calibration reproduce MTBS, while the automatic thresholds recover only part of the analyst's judgment. Review estimated thresholds before using the classes.
 
@@ -483,7 +483,7 @@ Version history is in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+GNU General Public License, version 2 or (at your option) any later version. See [LICENSE](LICENSE).
 
 ## Author
 

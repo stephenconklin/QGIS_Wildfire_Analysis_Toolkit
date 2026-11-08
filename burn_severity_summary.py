@@ -32,7 +32,6 @@ from qgis.core import (
     QgsProcessing,
     QgsProcessingAlgorithm,
     QgsProcessingException,
-    QgsProcessingParameterDefinition,
     QgsProcessingParameterEnum,
     QgsProcessingParameterFeatureSink,
     QgsProcessingParameterFeatureSource,
@@ -43,12 +42,11 @@ from qgis.core import (
     QgsProcessingParameterString,
     QgsProcessingParameterVectorDestination,
     QgsProcessingUtils,
-    QgsUnitTypes,
-    QgsWkbTypes,
 )
+from qgis.PyQt.QtCore import QMetaType
 import processing
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 ACRES_PER_HA = 2.4710538
 
@@ -78,52 +76,36 @@ INDEX_EXPRESSIONS = {
 CODE_RE = re.compile(r'^[A-Za-z0-9_]+$')
 
 
-# ---- QGIS 3.x / 4.x compatibility -------------------------------------------
-# Prefer the newer enum names (QGIS >= 3.30/3.36/3.38) and fall back to the old ones.
-
-def _try(new, old):
-    try:
-        return new()
-    except AttributeError:
-        return old()
-
+# ---- QGIS 3.44+ / 4.x helpers ------------------------------------------------
+# Enums are written only in their scoped form: QGIS 4 (Qt6) accepts nothing
+# else, and the plugins.qgis.org Qt6 check flags every flat name.
 
 def _field(name, kind):
-    """kind: 'int', 'double' or 'string'. QGIS >= 3.38 wants QMetaType, older QVariant."""
+    """kind: 'int', 'double' or 'string'."""
     length = 50 if kind == 'string' else 0
-    try:
-        from qgis.PyQt.QtCore import QMetaType
-        t = {'int': QMetaType.Type.Int, 'double': QMetaType.Type.Double,
-             'string': QMetaType.Type.QString}[kind]
-        return QgsField(name, t, len=length)
-    except (AttributeError, TypeError):
-        from qgis.PyQt.QtCore import QVariant
-        t = {'int': QVariant.Int, 'double': QVariant.Double, 'string': QVariant.String}[kind]
-        return QgsField(name, t, len=length)
+    t = {'int': QMetaType.Type.Int, 'double': QMetaType.Type.Double,
+         'string': QMetaType.Type.QString}[kind]
+    return QgsField(name, t, len=length)
 
 
 def _polygon_type():
-    return _try(lambda: Qgis.ProcessingSourceType.VectorPolygon,
-                lambda: QgsProcessing.TypeVectorPolygon)
+    return Qgis.ProcessingSourceType.VectorPolygon
 
 
 def _any_vector_type():
-    return _try(lambda: Qgis.ProcessingSourceType.Vector,
-                lambda: QgsProcessing.TypeVector)
+    return Qgis.ProcessingSourceType.Vector
 
 
 def _meters():
-    return _try(lambda: Qgis.DistanceUnit.Meters, lambda: QgsUnitTypes.DistanceMeters)
+    return Qgis.DistanceUnit.Meters
 
 
 def _no_geometry():
-    return _try(lambda: Qgis.WkbType.NoGeometry, lambda: QgsWkbTypes.NoGeometry)
+    return Qgis.WkbType.NoGeometry
 
 
 def _advanced(param):
-    flag = _try(lambda: Qgis.ProcessingParameterFlag.Advanced,
-                lambda: QgsProcessingParameterDefinition.FlagAdvanced)
-    param.setFlags(param.flags() | flag)
+    param.setFlags(param.flags() | Qgis.ProcessingParameterFlag.Advanced)
     return param
 
 
@@ -491,7 +473,7 @@ class BurnSeveritySummary(QgsProcessingAlgorithm):
             vals += [float(round(counts[z][v] * pixel_ha * ACRES_PER_HA)) for z in zone_names]
             feat = QgsFeature(fields)
             feat.setAttributes(vals)
-            sink.addFeature(feat, QgsFeatureSink.FastInsert)
+            sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
 
         for z in zone_names:
             feedback.pushInfo(

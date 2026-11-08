@@ -189,7 +189,7 @@ class FindHlsScenes(QgsProcessingAlgorithm):
             feat.setAttributes([granule, sensor, tile, date, doy,
                                 None if cloud is None else int(round(cloud)), round(pct, 2), dt,
                                 None if c is None else round(c, 1), None if d is None else round(d, 1)])
-            sink.addFeature(feat, QgsFeatureSink.FastInsert)
+            sink.addFeature(feat, QgsFeatureSink.Flag.FastInsert)
         dates = sorted({r[0] for r in rows})
         feedback.pushInfo(f'{len(rows)} granules on {len(dates)} dates.')
         if not rows:

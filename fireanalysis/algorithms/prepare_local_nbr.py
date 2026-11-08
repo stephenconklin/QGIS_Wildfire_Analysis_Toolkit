@@ -206,7 +206,4 @@ def write_scene_nbr(scene, aoi, crs, buffer_m, pixel, mask_keys, nbr_out, refl_o
 
 def _folder_behavior():
     from qgis.core import Qgis
-    try:
-        return Qgis.ProcessingFileParameterBehavior.Folder
-    except AttributeError:
-        return QgsProcessingParameterFile.Folder
+    return Qgis.ProcessingFileParameterBehavior.Folder
