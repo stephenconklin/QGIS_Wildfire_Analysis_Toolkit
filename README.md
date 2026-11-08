@@ -504,6 +504,7 @@ Plotting percent puts zones of different sizes on the same scale. Use the `ac_` 
 | `burn_severity_summary.py` | Burn severity summary, a single file that also installs as a script. |
 | `fireanalysis/` | The pipeline package (plugin only): Earthdata login, STAC search, HLS, Planetary Computer, MTBS service, local scenes, and the algorithms. |
 | `plugin/` | Plugin wrapper: provider, entry point, `metadata.txt`, icon. |
+| `dev/make_icon.py` | Draws the plugin icon, `plugin/icon.png`. |
 | `docs/DESIGN.md` | The pipeline plan, decisions and verified service details. |
 | `dev/build_plugin.py` | Builds `dist/wildfire_analysis_toolkit-<version>.zip`. |
 | `dev/smoke_test.py` | Runs every mode on `testdata/` and checks the counts, inside QGIS (Python Console) or headless. |

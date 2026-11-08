@@ -1,8 +1,14 @@
 # Changelog
 
+## 2.1.1 — 2026-11-08
+
+The first version uploaded to plugins.qgis.org: 2.1.0 with a new icon.
+
+- **A new plugin icon**: a flame drawn as a burned-area perimeter (black outline) and filled like a severity map, the MTBS classes nested as flames from unburned to low at the edge to the high-severity core, on a land-coloured tile with faint contours, drawn by `dev/make_icon.py` as a 256 × 256 PNG. It replaces the 1.1 placeholder (a flame over a bar chart) in the Plugin Manager, and every tool in the Processing Toolbox now shows it instead of the generic icon.
+
 ## 2.1.0 — 2026-11-08
 
-MTBS fire records without a manual download. The first version uploaded to plugins.qgis.org. Development builds were `2.1.0-dev.1` and `2.1.0-dev.2`.
+MTBS fire records without a manual download. Tagged on GitHub (`v2.1.0`) but not uploaded; 2.1.1 is. Development builds were `2.1.0-dev.1` and `2.1.0-dev.2`.
 
 - **Find MTBS fires** (`fireanalysis:findmtbsfires`, new group **Fire records**). Looks up the 31,000+ fires MTBS has mapped since 1984 by name, id, years or area, with the whole MTBS record (ignition date, assessment, MTBS's pre- and post-fire scenes, dNBR offset, thresholds, IRWIN id), as perimeters or points. The output keeps MTBS's field names, so one selected fire goes straight into the pipeline.
 - **The plugin fetches MTBS data itself.** The USGS MTBS fire records file (3.5 MB) is downloaded on first use and cached in the QGIS profile, checked for a newer copy at most once a day, and used offline from the cache. Perimeters come from the MTBS map service, or, for fires it doesn't have yet, from the full USGS perimeter file, a 420 MB download made only when the user allows it, then cached.
@@ -15,7 +21,7 @@ MTBS fire records without a manual download. The first version uploaded to plugi
 
 ## 2.0.0 — 2026-11-08
 
-Tagged on GitHub (`v2.0.0`) but not uploaded to plugins.qgis.org; 2.1.0 is the first upload. Development builds were numbered `2.0.0-dev.1` (2026-10-06) to `2.0.0-dev.4`; the plugin's version, the run logs and `report.json` show which build made a result.
+Tagged on GitHub (`v2.0.0`) but not uploaded to plugins.qgis.org; 2.1.1 is the first upload. Development builds were numbered `2.0.0-dev.1` (2026-10-06) to `2.0.0-dev.4`; the plugin's version, the run logs and `report.json` show which build made a result.
 
 The plugin becomes a fire analysis pipeline (plan in `docs/DESIGN.md`) and is renamed the **Wildfire Analysis Toolkit**: plugin name, Toolbox provider and zip folder (`wildfire_analysis_toolkit`). The provider id stays `fireanalysis`, so algorithm ids are unchanged. The standalone script becomes Burn severity summary 1.2.0: same parameters, outputs and results, with only the QGIS 3.44 minimum below.
 

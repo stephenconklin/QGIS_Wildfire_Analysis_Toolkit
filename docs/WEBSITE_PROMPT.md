@@ -1,30 +1,37 @@
 # Prompt: update the plugin's web page
 
 Paste the text below into a Claude Code session opened in the repository of
-conklingeospatial.com (an Astro site), after 2.1.0 is uploaded to plugins.qgis.org.
-Before pasting, fill in the one item marked **[confirm]**.
+conklingeospatial.com (an Astro site), after you have uploaded 2.1.1 to plugins.qgis.org.
+It assumes the plugin is still awaiting review there. Once QGIS staff have approved it,
+change the line marked **(review status)** to say it is listed, before pasting.
 
 ---
 
 Update the project page for my QGIS plugin, the Wildfire Analysis Toolkit, at
 `/projects/qgis-wildfire-analysis-toolkit/` (find its source file under the projects
 content). The page was written while version 2.0 was in development. Bring it up to
-date with the released plugin and with version 2.1, which adds MTBS fire records.
+date with the released plugin (version 2.1, which adds MTBS fire records) and give it
+the plugin's new icon.
 Keep the page's existing structure, tone (plain, technical, concrete numbers), images and
 fire gallery. Change or add only what the facts below support; don't invent features,
 numbers, quotes or test results. Show me the diff before committing.
 
 ## What changed since the page was written
 
-1. **Released.** Version 2.1.0 is the first release in the official QGIS plugin
-   repository (plugins.qgis.org); version 2.0.0 was tagged on GitHub but never uploaded.
-   **[confirm: the 2.1.0 release date, and whether plugins.qgis.org has approved and
-   listed it or it is still awaiting review.]** Replace "version 2.0 in development" in
-   the hero label with "QGIS plugin, 2026 (version 2.1)". If it is still awaiting review,
-   say so in one short line near the install instructions instead of a Plugin Manager
-   step.
-2. **Install.** In QGIS: *Plugins › Manage and Install Plugins*, search for "Wildfire
-   Analysis Toolkit", *Install Plugin* (once it is listed). Requires QGIS 3.44 or later,
+1. **Released.** Version 2.1.1 was released on 2026-11-08 (GitHub tag `v2.1.1`:
+   https://github.com/stephenconklin/QGIS_Wildfire_Analysis_Toolkit/releases/tag/v2.1.1)
+   and is the first version submitted to the official QGIS plugin repository
+   (plugins.qgis.org). Versions 2.0.0 and 2.1.0 were tagged on GitHub but never
+   published there; 2.1.1 is 2.1.0 with the new icon.
+   **(review status)** It has been submitted to plugins.qgis.org and is awaiting review by
+   QGIS staff. Replace "version 2.0 in development" in the hero label with "QGIS plugin,
+   2026 (version 2.1)". While it awaits review, say so in one short line in the install
+   section ("Submitted to the QGIS plugin repository; awaiting review"), and give the
+   GitHub install route below instead of the Plugin Manager search.
+2. **Install.** Once it is listed: in QGIS, *Plugins › Manage and Install Plugins*,
+   search for "Wildfire Analysis Toolkit", *Install Plugin*. Until then: download the
+   plugin zip from the repository (build it with `python3 dev/build_plugin.py`, as the
+   README explains) and use *Install from ZIP* in the same dialog. Requires QGIS 3.44 or later,
    including QGIS 4. Free and open source, GPL-2.0-or-later. Code, README and issue
    tracker: https://github.com/stephenconklin/QGIS_Wildfire_Analysis_Toolkit. Add a short
    "Get it" section or line with these links, near the top or at the end.
@@ -45,8 +52,9 @@ numbers, quotes or test results. Show me the diff before committing.
      the fire's perimeter, uses MTBS's own image dates and assessment type, applies
      MTBS's thresholds (adjusted to this image pair's unburned offset), and compares the
      result with MTBS's published classes. Example: Tunnel Fire, Arizona, 2022 (17,641
-     acres), from its fire id alone, ran in 23 seconds and agreed with MTBS's published
-     classes on 87 % of pixels (Cohen's kappa 0.75).
+     acres), from its fire id alone, ran in 23 seconds to about 3.5 minutes (depending on
+     the imagery servers) and agreed with MTBS's published classes on 87 % of pixels
+     (Cohen's kappa 0.75).
    - A perimeter the user gives is matched to its MTBS record automatically: a NIFC/WFIGS
      perimeter by its IRWIN incident id, any other by an MTBS fire inside it that ignited
      between the fire's dates.
@@ -54,6 +62,9 @@ numbers, quotes or test results. Show me the diff before committing.
      or so), which only the full USGS perimeter file has, the user can allow a one-time
      420 MB download, which is then cached.
    - Supports Sentinel-2C scenes, which MTBS uses for 2025 fires such as Dragon Bravo.
+   - MTBS's image pair comes from NASA HLS when HLS has those scenes; when it lacks one
+     (a missing tile, Landsat 4–7) or its search service is down, both scenes come from
+     Microsoft Planetary Computer, so a pair is always processed the same way.
    - Nearby-fire threshold estimates now use the cached records: more current than the
      map service (420 fires from 2025 on, against 90 in the map service) and they no
      longer depend on it staying up.
@@ -91,6 +102,28 @@ numbers, quotes or test results. Show me the diff before committing.
    classify severity, burn severity summary).
 7. **Stack.** Add "USGS MTBS fire records and perimeters, USFS MTBS map and image
    services" to the Stack list.
+
+## Branding: the plugin icon
+
+The plugin has a new icon: a flame whose black outline is a burned-area perimeter,
+filled with the MTBS severity classes nested as smaller flames (green unburned to low at
+the edge, aquamarine low, yellow moderate, red high core), on a beige land tile with
+faint contours. It is the icon QGIS shows in the Plugin Manager and on every tool in the
+Processing Toolbox, so use it on the site too, for continuity:
+
+- **File.** A 512 × 512 PNG with a transparent background around the rounded tile, at
+  `/Users/stephenconklin/Documents/ConklinGeospatial/Projects/GITHub/QGIS_Wildfire_Analysis_Toolkit/docs/images/icon_512.png`
+  (or, if that path isn't reachable, from
+  https://raw.githubusercontent.com/stephenconklin/QGIS_Wildfire_Analysis_Toolkit/v2.1.1/docs/images/icon_512.png).
+  Copy it into the site's assets next to this project's other images, and let the site's
+  image pipeline make the sizes it needs. Don't redraw, recolour or crop it.
+- **Where.** Beside the page title in the hero (about 64–96 px, with alt text "Wildfire
+  Analysis Toolkit icon"), and on this project's card in the projects list, if cards
+  there show icons or thumbnails. First look at how the Stacked Terrain Builder project
+  page (the "Next project" link) and its card use that plugin's icon, if they do, and
+  follow the same pattern and sizes, so the two plugin pages match.
+- If the site sets per-page favicons or social preview images, use the icon only where
+  that is already the site's pattern; otherwise leave them alone.
 
 ## Images
 

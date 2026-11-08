@@ -24,6 +24,14 @@ from .fireanalysis.algorithms.severity_map import SeverityMap
 from .fireanalysis.algorithms.suggest_image_pairs import SuggestImagePairs
 
 
+ICON = os.path.join(os.path.dirname(__file__), 'icon.png')
+
+
+def _icon(self):
+    """The plugin icon for every algorithm in the Toolbox (drawn by dev/make_icon.py)."""
+    return QIcon(ICON)
+
+
 class _PluginBurnSeveritySummary(BurnSeveritySummary):
     # The standalone script uses group "Fire Analysis"; inside the provider it goes in Severity.
     def group(self):
@@ -47,10 +55,11 @@ class FireAnalysisProvider(QgsProcessingProvider):
         return VERSION
 
     def icon(self):
-        return QIcon(os.path.join(os.path.dirname(__file__), 'icon.svg'))
+        return QIcon(ICON)
 
     def loadAlgorithms(self):  # noqa: N802 (QGIS API name)
         for alg in (BurnSeverityPipeline(), SeverityMap(), FindMtbsFires(), FindHlsScenes(), SuggestImagePairs(), FetchHlsNbr(), PrepareLocalNbr(),
                     FindPlanetaryScenes(), FetchPlanetaryNbr(),
                     BuildDnbr(), DraftPerimeter(), ClassifySeverity(), _PluginBurnSeveritySummary()):
+            type(alg).icon = _icon  # set on the class, so instances Processing creates get it too
             self.addAlgorithm(alg)

@@ -40,7 +40,7 @@ dist = REPO / "dist"
 dist.mkdir(exist_ok=True)
 out = dist / f"{PKG}-{version}.zip"
 with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-    for f in ("__init__.py", "plugin.py", "provider.py", "icon.svg"):
+    for f in ("__init__.py", "plugin.py", "provider.py", "icon.png"):
         z.write(REPO / "plugin" / f, f"{PKG}/{f}")
     z.writestr(f"{PKG}/metadata.txt", metadata)
     z.write(REPO / "burn_severity_summary.py", f"{PKG}/burn_severity_summary.py")
