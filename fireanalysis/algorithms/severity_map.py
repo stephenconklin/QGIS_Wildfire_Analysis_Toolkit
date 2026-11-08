@@ -138,7 +138,7 @@ class SeverityMap(QgsProcessingAlgorithm):
             raise QgsProcessingException('Could not load the burned-area polygons.')
         sub = vector(self.SUBAREAS, 'Sub-areas', '30,90,200,255', 0.5, dash=True) \
             if parameters.get(self.SUBAREAS) else None
-        top = [l for l in (sub, perimeter) if l is not None]
+        top = [lyr for lyr in (sub, perimeter) if lyr is not None]
         for layer in top + layers:
             project.addMapLayer(layer)
 

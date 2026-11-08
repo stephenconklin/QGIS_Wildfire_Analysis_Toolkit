@@ -17,7 +17,7 @@ import urllib.parse
 from . import local, stac
 
 SEARCH = 'https://planetarycomputer.microsoft.com/api/stac/v1/search'
-TOKEN = 'https://planetarycomputer.microsoft.com/api/sas/v1/token/'
+SAS_API = 'https://planetarycomputer.microsoft.com/api/sas/v1/token/'  # public endpoint, not a secret
 SOURCES = {  # key -> (collection, label, band assets nir/swir2/red, quality asset)
     'landsat': ('landsat-c2-l2', 'Landsat 4-9 Collection 2 Level-2', ('nir08', 'swir22', 'red'), 'qa_pixel'),
     's2': ('sentinel-2-l2a', 'Sentinel-2 L2A', ('B8A', 'B12', 'B04'), 'SCL'),
@@ -38,7 +38,7 @@ def token(collection, feedback=None):
     if cached and cached[1] - 300 > time.time():
         return cached[0]
     try:
-        data = stac._request(TOKEN + collection, None, feedback)
+        data = stac._request(SAS_API + collection, None, feedback)
     except stac.StacError as e:
         raise PlanetaryError(f'Could not get a Planetary Computer token: {e}') from None
     if not data or 'token' not in data:

@@ -1,7 +1,7 @@
 # Prompt: update the plugin's web page
 
 Paste the text below into a Claude Code session opened in the repository of
-conklingeospatial.com (an Astro site), after you have uploaded 2.1.1 to plugins.qgis.org.
+conklingeospatial.com (an Astro site), after you have uploaded 2.1.2 to plugins.qgis.org.
 It assumes the plugin is still awaiting review there. Once QGIS staff have approved it,
 change the line marked **(review status)** to say it is listed, before pasting.
 
@@ -18,11 +18,11 @@ numbers, quotes or test results. Show me the diff before committing.
 
 ## What changed since the page was written
 
-1. **Released.** Version 2.1.1 was released on 2026-11-08 (GitHub tag `v2.1.1`:
-   https://github.com/stephenconklin/QGIS_Wildfire_Analysis_Toolkit/releases/tag/v2.1.1)
-   and is the first version submitted to the official QGIS plugin repository
-   (plugins.qgis.org). Versions 2.0.0 and 2.1.0 were tagged on GitHub but never
-   published there; 2.1.1 is 2.1.0 with the new icon.
+1. **Released.** Version 2.1.2 was released on 2026-11-08 (GitHub tag `v2.1.2`:
+   https://github.com/stephenconklin/QGIS_Wildfire_Analysis_Toolkit/releases/tag/v2.1.2)
+   and is the version submitted to the official QGIS plugin repository
+   (plugins.qgis.org). It is 2.1 (MTBS fire records) with the new icon and clean
+   repository checks.
    **(review status)** It has been submitted to plugins.qgis.org and is awaiting review by
    QGIS staff. Replace "version 2.0 in development" in the hero label with "QGIS plugin,
    2026 (version 2.1)". While it awaits review, say so in one short line in the install
@@ -114,7 +114,7 @@ Processing Toolbox, so use it on the site too, for continuity:
 - **File.** A 512 × 512 PNG with a transparent background around the rounded tile, at
   `/Users/stephenconklin/Documents/ConklinGeospatial/Projects/GITHub/QGIS_Wildfire_Analysis_Toolkit/docs/images/icon_512.png`
   (or, if that path isn't reachable, from
-  https://raw.githubusercontent.com/stephenconklin/QGIS_Wildfire_Analysis_Toolkit/v2.1.1/docs/images/icon_512.png).
+  https://raw.githubusercontent.com/stephenconklin/QGIS_Wildfire_Analysis_Toolkit/v2.1.2/docs/images/icon_512.png).
   Copy it into the site's assets next to this project's other images, and let the site's
   image pipeline make the sizes it needs. Don't redraw, recolour or crop it.
 - **Where.** Beside the page title in the hero (about 64–96 px, with alt text "Wildfire

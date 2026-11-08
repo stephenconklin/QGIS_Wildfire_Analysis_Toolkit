@@ -131,7 +131,7 @@ class BurnSeverityPipeline(QgsProcessingAlgorithm):
             'with MTBS\'s published ones. A WFIGS perimeter is matched to its MTBS record by IRWIN id, and any '
             'perimeter by an MTBS fire centred inside it that ignited between the fire\'s dates.</p>'
             '<p><b>From a WFIGS perimeter:</b> give one fire from WFIGS Interagency Fire Perimeters '
-            '(NIFC; select it and tick Selected features only) and leave the fire name and dates empty: '
+            '(NIFC; pick it and tick Selected features only) and leave the fire name and dates empty: '
             'they are read from its record (name; discovery date; containment, else control, else fire-out '
             'date), and the report lists the record (size, cause, ignition point, mapping method).</p>'
             '<p><b>Burned area.</b> <i>As given</i> uses your polygons for everything: draw them along '

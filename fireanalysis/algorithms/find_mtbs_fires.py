@@ -71,7 +71,7 @@ class FindMtbsFires(QgsProcessingAlgorithm):
             'at most once a day and works offline from the cache. Perimeters come from the MTBS map service; '
             'for fires it does not have yet (most fires of the last year or so), from the full MTBS perimeter '
             'file, a one-time 420 MB download that happens only when you allow it.</p>'
-            '<p>Give one fire from the output (select it, then <i>Selected features only</i>) to <i>Burn '
+            '<p>Give one fire from the output (pick it, then <i>Selected features only</i>) to <i>Burn '
             'severity (whole pipeline)</i>: it reads the name, dates, MTBS\'s image pair and thresholds from '
             'the record. Or type the fire\'s id in the pipeline\'s <i>MTBS fire</i> field.</p>'
             f'<p><i>Version {VERSION}</i></p>')

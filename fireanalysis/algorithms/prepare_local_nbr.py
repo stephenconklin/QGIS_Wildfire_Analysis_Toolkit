@@ -85,7 +85,6 @@ class PrepareLocalNbr(QgsProcessingAlgorithm):
             createByDefault=False))
 
     def processAlgorithm(self, parameters, context, feedback):
-        import numpy as np
         from osgeo import gdal
         gdal.UseExceptions()
 

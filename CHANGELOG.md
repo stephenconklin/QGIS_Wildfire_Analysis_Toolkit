@@ -1,8 +1,12 @@
 # Changelog
 
+## 2.1.2 — 2026-11-08
+
+- Clears the warnings of the plugins.qgis.org upload checks; no change in behaviour. Bandit read the words "select … from" in two help texts as an SQL query (reworded) and the name of the Planetary Computer token endpoint constant, `TOKEN`, as a password (renamed `SAS_API`; it is a public URL). Flake8: a variable named `l` (E741) renamed, and an unused import removed.
+
 ## 2.1.1 — 2026-11-08
 
-The first version uploaded to plugins.qgis.org: 2.1.0 with a new icon.
+2.1.0 with a new icon. The plugins.qgis.org checks on it flagged the warnings 2.1.2 clears.
 
 - **A new plugin icon**: a flame drawn as a burned-area perimeter (black outline) and filled like a severity map, the MTBS classes nested as flames from unburned to low at the edge to the high-severity core, on a land-coloured tile with faint contours, drawn by `dev/make_icon.py` as a 256 × 256 PNG. It replaces the 1.1 placeholder (a flame over a bar chart) in the Plugin Manager, and every tool in the Processing Toolbox now shows it instead of the generic icon.
 
